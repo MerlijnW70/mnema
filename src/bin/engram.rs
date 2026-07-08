@@ -27,7 +27,10 @@ use engram::embed::HashEmbedder;
 use engram::facade::Engram;
 use engram::{Destination, EgressTier};
 
-const DIMS: usize = 64;
+/// The default embedder's width, pinned once in the library so this CLI and the
+/// `engram-mcp` server — which share a store family — can never embed at different
+/// widths and corrupt each other's recall.
+const DIMS: usize = HashEmbedder::DEFAULT_DIMS;
 
 fn die(msg: &str) -> ! {
     eprintln!("engram: {msg}");
