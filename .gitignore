@@ -3,3 +3,9 @@ Cargo.lock
 
 # Engram stores are encrypted, machine-specific data — never source.
 *.engram
+
+# Per-store key: the random secret that seals the sibling *.engram. NEVER source.
+*.key
+
+# Project-scoped MCP config: machine-specific store path. Keep out of source control.
+.mcp.json
