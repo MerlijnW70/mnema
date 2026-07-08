@@ -1,0 +1,5 @@
+/target
+Cargo.lock
+
+# Engram stores are encrypted, machine-specific data — never source.
+*.engram

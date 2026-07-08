@@ -1,0 +1,39 @@
+[package]
+name = "engram"
+version = "0.1.0"
+edition = "2024"
+description = "A fast, secure, local-first memory layer for LLMs — four memory types, contradiction-resolving writes, injection-resistant retrieval, encrypted at rest."
+license = "MIT OR Apache-2.0"
+keywords = ["memory", "llm", "ai", "vector", "local-first"]
+categories = ["data-structures", "database-implementations"]
+
+[dependencies]
+# The `secure` feature (encryption at rest for the episodic store + the Engram facade):
+# a small, vetted, safe-Rust crypto set — OPTIONAL, so the core (retrieval, semantic,
+# working, vector, egress) stays zero-dependency by default. See docs/adr/0020.
+chacha20poly1305 = { version = "0.10", optional = true }
+argon2 = { version = "0.5", optional = true }
+getrandom = { version = "0.2", optional = true }
+
+[features]
+# `secure` = encryption at rest (Argon2id + XChaCha20-Poly1305) for the episodic store
+# and the whole-`Engram` seal/open, plus the `Engram` facade, the `engram` CLI, and the
+# memory_demo example.
+secure = ["dep:chacha20poly1305", "dep:argon2", "dep:getrandom"]
+
+# The `engram` CLI (remember/recall/fact/stats over an encrypted store) — needs the
+# encrypted facade, hence the `secure` feature.
+[[bin]]
+name = "engram"
+path = "src/bin/engram.rs"
+required-features = ["secure"]
+
+# A live, self-verifying tour of the memory layer.
+[[example]]
+name = "memory_demo"
+required-features = ["secure"]
+
+# Channel-B style bench: exact vs approximate (IVF) vector recall — latency + recall.
+[[bench]]
+name = "engram"
+harness = false
