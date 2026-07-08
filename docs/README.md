@@ -7,6 +7,7 @@
 | [`adr/0020-engram-dependency-budget.md`](adr/0020-engram-dependency-budget.md) | Why a small, vetted, safe-Rust crypto set is allowed behind an optional `secure` feature (the core stays zero-dependency). |
 | [`adr/0021-engram-egress-tier.md`](adr/0021-engram-egress-tier.md) | The per-memory egress tier — how a `Private` memory is made *structurally* unable to reach a remote model. |
 | [`adr/0022-memory-augmented-self-evolution.md`](adr/0022-memory-augmented-self-evolution.md) | An example *consumer*: giving a self-evolving agent a memory of its own history. Included because it shows the layer used in anger. |
+| [`adr/0023-embedder-width-single-source.md`](adr/0023-embedder-width-single-source.md) | Why the default embedder's width is pinned as one library constant — a bug the ratchet structurally can't catch (recall-only drift between two binaries over a shared store). |
 
 ## A note on cross-references
 
