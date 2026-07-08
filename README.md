@@ -116,6 +116,17 @@ that ratchet: at extraction, **155/155 viable mutants killed, 0 survivors, 100%*
 the ADRs to `ADR-0007`, `BND-*`, or `Part N` point back to the emerge repository (see
 [`docs/README.md`](docs/README.md)).
 
+## Validated in a live agentic loop
+
+Beyond its unit tests, `engram` has been driven by a **real self-improving agent** (emerge's
+evolution loop, see [`docs/adr/0022`](docs/adr/0022-memory-augmented-self-evolution.md)): the loop
+stored each iteration's verdict as a memory and recalled the relevant lessons before the next
+proposal. In live runs the proposer **demonstrably used the recall** — it cited a recorded rejection
+by its detail code (`channelB-regress:scan`) and redesigned its change specifically so it would *not*
+repeat the remembered failure. Contradiction-resolving writes kept the belief base current across
+iterations; the egress filter and encrypted store held throughout. The memory layer works not just in
+a test harness, but as the actual memory of an agent doing real work.
+
 ## License
 
 Dual-licensed under **MIT OR Apache-2.0**.
