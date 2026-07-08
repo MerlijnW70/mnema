@@ -26,7 +26,7 @@ impl HashEmbedder {
     /// of a different length than the stored vectors makes cosine similarity meaningless
     /// and silently corrupts recall. Pinning it here, rather than as a private `const` in
     /// each binary, makes that agreement structural instead of a convention two crates can
-    /// drift apart on.
+    /// drift apart on. See ADR-0023.
     pub const DEFAULT_DIMS: usize = 128;
 
     /// A new embedder producing `dims`-dimensional vectors.
