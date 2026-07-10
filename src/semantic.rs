@@ -425,6 +425,18 @@ mod tests {
     }
 
     #[test]
+    fn reinforcing_with_an_older_timestamp_does_not_rewind_recency() {
+        // Reinforcement takes `at.max(new)`, so re-observing a belief with an OLDER
+        // timestamp bumps confidence but must NOT rewind its recency (a `= at` mutant would).
+        let mut s = SemanticStore::new();
+        s.assert("a", "b", "v", 5);
+        assert_eq!(s.assert("a", "b", "v", 2), Resolution::Reinforced);
+        let cur = s.current("a", "b").unwrap();
+        assert_eq!(cur.at, 5, "recency must not rewind to the older sighting");
+        assert_eq!(cur.confidence, 2, "but the belief is still reinforced");
+    }
+
+    #[test]
     fn forget_hard_deletes_matching_facts_live_and_superseded() {
         let mut s = SemanticStore::new();
         s.assert("alice", "diet", "vegetarian", 1);
