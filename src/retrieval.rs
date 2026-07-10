@@ -89,7 +89,7 @@ pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
             }
         })
         .collect();
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|b| std::cmp::Reverse(b.1));
     scored.into_iter().map(|(id, _)| id).collect()
 }
 
@@ -156,7 +156,7 @@ pub fn fuse_and_pack(
     decay: Option<Decay>,
 ) -> Vec<BundleItem> {
     let mut by_recency: Vec<&Memory> = memories.iter().collect();
-    by_recency.sort_by(|a, b| b.at.cmp(&a.at));
+    by_recency.sort_by_key(|b| std::cmp::Reverse(b.at));
     let recency_rank: Vec<MemoryId> = by_recency
         .iter()
         .take(per_retriever)

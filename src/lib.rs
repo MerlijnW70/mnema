@@ -145,7 +145,7 @@ pub fn assemble_bundle(
 ) -> Vec<BundleItem> {
     // Most-recent first; stable so equal timestamps keep input order.
     let mut ordered: Vec<&Memory> = memories.iter().collect();
-    ordered.sort_by(|a, b| b.at.cmp(&a.at));
+    ordered.sort_by_key(|b| std::cmp::Reverse(b.at));
     pack_bundle(&ordered, dest, char_budget)
 }
 
