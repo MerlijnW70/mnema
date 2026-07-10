@@ -8,14 +8,17 @@
 //! (identical to the query) must rank first in the exact search, every run. Run with
 //! `cargo bench --bench engram` or `scripts/fitness-engram.sh`.
 
-use engram::vector::{IvfIndex, VectorIndex};
+use engram::vector::{IvfIndex, VectorIndex, kmeans_anchors};
 use std::time::Instant;
 
 const DIMS: usize = 64;
 const N: u64 = 5000;
 const K: usize = 10;
-const ANCHORS: u64 = 64; // ~sqrt(N) buckets
+const ANCHORS: usize = 64; // ~sqrt(N) buckets
 const PROBE: usize = 8; // buckets scanned per approximate search
+const CLUSTERS: usize = 64; // topical clusters in the realistic workload
+const SPREAD: f32 = 0.10; // per-dimension jitter around a cluster centre
+const KMEANS_ITERS: usize = 10;
 const WARMUP: u32 = 5;
 const RUNS: u32 = 9; // timed samples; the median resists interference spikes
 const REPS: u32 = 20;
@@ -55,41 +58,90 @@ fn time_search(mut run: impl FnMut()) -> u64 {
     median(samples)
 }
 
-fn main() {
-    // Deterministic corpus: id 0 is the exact nearest (a copy of the query).
-    let mut qs = 1u64;
-    let query = vector(&mut qs);
-    let mut anchor_state = 7u64;
-    let anchors: Vec<Vec<f32>> = (0..ANCHORS).map(|_| vector(&mut anchor_state)).collect();
+/// A vector jittered around `centre` by ±SPREAD/2 per dimension — a point inside a cluster.
+fn near(centre: &[f32], state: &mut u64) -> Vec<f32> {
+    centre
+        .iter()
+        .map(|&x| x + SPREAD * (splitmix(state) - 0.5))
+        .collect()
+}
 
-    let mut exact = VectorIndex::new(DIMS);
-    let mut ivf = IvfIndex::new(DIMS, anchors);
-    exact.insert(0, query.clone()).unwrap();
-    ivf.insert(0, query.clone()).unwrap();
-    let mut state = 42u64;
-    for id in 1..N {
-        let v = vector(&mut state);
-        exact.insert(id, v.clone()).unwrap();
-        ivf.insert(id, v).unwrap();
+/// The exact top-K ids for `query` over `corpus` (the oracle every recall is measured against).
+fn exact_top(corpus: &[(u64, Vec<f32>)], query: &[f32]) -> Vec<u64> {
+    let mut idx = VectorIndex::new(DIMS);
+    for (id, v) in corpus {
+        idx.insert(*id, v.clone()).unwrap();
     }
+    idx.search(query, K).iter().map(|h| h.id).collect()
+}
 
-    let exact_ns = time_search(|| {
-        exact.search(&query, K);
-    });
-    let ivf_ns = time_search(|| {
-        ivf.search(&query, K, PROBE);
-    });
+/// Fraction of the exact top-K that an IVF built on `anchors` recovers at PROBE buckets.
+fn recall(corpus: &[(u64, Vec<f32>)], query: &[f32], anchors: Vec<Vec<f32>>, oracle: &[u64]) -> f64 {
+    let mut ivf = IvfIndex::new(DIMS, anchors);
+    for (id, v) in corpus {
+        ivf.insert(*id, v.clone()).unwrap();
+    }
+    let got: Vec<u64> = ivf.search(query, K, PROBE).iter().map(|h| h.id).collect();
+    oracle.iter().filter(|id| got.contains(id)).count() as f64 / K as f64
+}
 
-    // Quality: how much of the exact top-k does the approximate search recover?
-    let exact_top: Vec<u64> = exact.search(&query, K).iter().map(|h| h.id).collect();
-    let ivf_top: Vec<u64> = ivf.search(&query, K, PROBE).iter().map(|h| h.id).collect();
-    let overlap = exact_top.iter().filter(|id| ivf_top.contains(id)).count();
-    let recall = overlap as f64 / K as f64;
-    let top = *exact_top.first().unwrap();
+fn main() {
+    // --- Worst case: structureless uniform-random vectors (no clusters to find). ---
+    let mut qs = 1u64;
+    let rq = vector(&mut qs);
+    let mut random: Vec<(u64, Vec<f32>)> = vec![(0, rq.clone())]; // id 0 = the query itself
+    let mut rs = 42u64;
+    for id in 1..N {
+        random.push((id, vector(&mut rs)));
+    }
+    let random_anchors: Vec<Vec<f32>> = {
+        let mut a = 7u64;
+        (0..ANCHORS).map(|_| vector(&mut a)).collect()
+    };
+    let recall_random = recall(&random, &rq, random_anchors, &exact_top(&random, &rq));
 
-    let exact_ns_per_op = exact_ns as f64 / N as f64;
-    let ivf_ns_per_op = ivf_ns as f64 / N as f64;
+    // --- Realistic: topically-clustered memories added in batches (as an agent would:
+    //     a run of trip notes, then a run of code notes, ...). Cluster c owns a contiguous
+    //     id block, so the FIRST-N-as-anchors placeholder samples only the earliest clusters. ---
+    let centres: Vec<Vec<f32>> = {
+        let mut c = 99u64;
+        (0..CLUSTERS).map(|_| vector(&mut c)).collect()
+    };
+    let mut s = 5u64;
+    let cq = near(&centres[0], &mut s); // query lives in cluster 0
+    let mut clustered: Vec<(u64, Vec<f32>)> = vec![(0, cq.clone())]; // id 0 = the query itself
+    for id in 1..N {
+        let c = id as usize * CLUSTERS / N as usize; // contiguous blocks → topical insertion order
+        clustered.push((id, near(&centres[c], &mut s)));
+    }
+    let oracle = exact_top(&clustered, &cq);
+    let top = *oracle.first().unwrap();
+
+    let corpus_vecs: Vec<Vec<f32>> = clustered.iter().map(|(_, v)| v.clone()).collect();
+    let first_n: Vec<Vec<f32>> = clustered.iter().take(ANCHORS).map(|(_, v)| v.clone()).collect();
+    let kmeans = kmeans_anchors(&corpus_vecs, ANCHORS, KMEANS_ITERS);
+    let recall_first_n = recall(&clustered, &cq, first_n, &oracle);
+    let recall_kmeans = recall(&clustered, &cq, kmeans.clone(), &oracle);
+
+    // Timing on the realistic (clustered + k-means) configuration.
+    let mut exact = VectorIndex::new(DIMS);
+    let mut ivf = IvfIndex::new(DIMS, kmeans);
+    for (id, v) in &clustered {
+        exact.insert(*id, v.clone()).unwrap();
+        ivf.insert(*id, v.clone()).unwrap();
+    }
+    let exact_ns_per_op = time_search(|| {
+        exact.search(&cq, K);
+    }) as f64
+        / N as f64;
+    let ivf_ns_per_op = time_search(|| {
+        ivf.search(&cq, K, PROBE);
+    }) as f64
+        / N as f64;
+
     println!(
-        "{{\"benchmark\":\"engram\",\"dims\":{DIMS},\"n\":{N},\"k\":{K},\"anchors\":{ANCHORS},\"probe\":{PROBE},\"top\":{top},\"recall\":{recall:.3},\"exact_ns_per_op\":{exact_ns_per_op:.3},\"ivf_ns_per_op\":{ivf_ns_per_op:.3}}}"
+        "{{\"benchmark\":\"engram\",\"dims\":{DIMS},\"n\":{N},\"k\":{K},\"anchors\":{ANCHORS},\"probe\":{PROBE},\"clusters\":{CLUSTERS},\"top\":{top},\
+         \"recall_random\":{recall_random:.3},\"recall_clustered_firstN\":{recall_first_n:.3},\"recall_clustered_kmeans\":{recall_kmeans:.3},\
+         \"exact_ns_per_op\":{exact_ns_per_op:.3},\"ivf_ns_per_op\":{ivf_ns_per_op:.3}}}"
     );
 }
