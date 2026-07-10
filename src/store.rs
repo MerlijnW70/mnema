@@ -14,7 +14,7 @@
 //! *proven*, not asserted. The AEAD itself is trusted (RustCrypto), exercised by the
 //! round-trip and wrong-key tests.
 
-use argon2::Argon2;
+use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 
@@ -81,10 +81,28 @@ fn tier_from_tag(tag: u8) -> Result<EgressTier, StoreError> {
 /// Derive a 32-byte key from a passphrase + salt with Argon2id (memory-hard).
 fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<[u8; 32], StoreError> {
     let mut key = [0u8; 32];
-    Argon2::default()
+    argon2()?
         .hash_password_into(passphrase, salt, &mut key)
         .map_err(|_| StoreError::KeyDerivation)?;
     Ok(key)
+}
+
+/// The Argon2id configuration, pinned **explicitly** rather than taken from
+/// `Argon2::default()`. The parameters (m/t/p) are baked into the derived key, so if the
+/// `argon2` crate ever changed its default, every existing store would silently derive a
+/// different key and fail to open. Pinning them here makes the KDF reproducible and
+/// upgrade-safe. These match the current OWASP-recommended defaults; raising them (or adding
+/// AEAD associated-data binding) is a deliberate, versioned format migration — it re-keys
+/// every store and so needs a format byte + migration path, tracked separately.
+fn argon2() -> Result<Argon2<'static>, StoreError> {
+    let params = Params::new(
+        Params::DEFAULT_M_COST,
+        Params::DEFAULT_T_COST,
+        Params::DEFAULT_P_COST,
+        Some(32),
+    )
+    .map_err(|_| StoreError::KeyDerivation)?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
 /// Append a length-prefixed byte string (`u32` LE length, then the bytes).
