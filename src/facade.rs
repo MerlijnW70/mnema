@@ -15,8 +15,8 @@
 use crate::retrieval::{Decay, RetrievalWeights, fuse_and_pack, hybrid_recall};
 use crate::semantic::{Fact, FactStatus, Resolution, SemanticStore};
 use crate::store::{
-    EpisodicLog, PurgeReceipt, StoreError, open_bytes, put_bytes, seal_bytes, string_from,
-    take_bytes, take_u8, take_u32, take_u64,
+    EpisodicLog, PurgeReceipt, SealingKey, StoreError, put_bytes, string_from, take_bytes, take_u8,
+    take_u32, take_u64,
 };
 use crate::vector::{Embedder, IvfIndex, VectorIndex};
 use crate::working::{Note, WorkingMemory};
@@ -44,6 +44,12 @@ pub struct Engram<E: Embedder> {
     working: WorkingMemory,
     embedder: E,
     clock: u64,
+    /// The derived sealing key, cached after the first [`seal`](Engram::seal) or [`open`]
+    /// (Engram::open) so repeated seals reuse it instead of re-running the memory-hard Argon2id
+    /// KDF on every write. `None` until the store is first sealed or opened.
+    ///
+    /// [`open`]: Engram::open
+    seal_key: Option<SealingKey>,
 }
 
 impl<E: Embedder> Engram<E> {
@@ -58,6 +64,7 @@ impl<E: Embedder> Engram<E> {
             working: WorkingMemory::new(WORKING_HORIZON, WORKING_CAPACITY),
             embedder,
             clock: 0,
+            seal_key: None,
         }
     }
 
@@ -353,12 +360,26 @@ impl<E: Embedder> Engram<E> {
     /// reconstructs it. Sealing routes through the same AEAD as the raw store.
     ///
     /// [`open`]: Engram::open
-    pub fn seal(&self, passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
+    /// The passphrase is used to derive the sealing key **once** — on the first seal (or at
+    /// [`open`](Engram::open)); later seals reuse the cached key with a fresh nonce, so a store
+    /// that persists on every write pays the memory-hard Argon2id cost once, not per write. (The
+    /// cached key stays with this store's original passphrase; to change it, re-seal a freshly
+    /// opened store rather than passing a different passphrase here.)
+    pub fn seal(&mut self, passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
         let mut plain = Vec::new();
         plain.extend_from_slice(&self.clock.to_le_bytes());
         put_bytes(&mut plain, &self.episodic.encode());
         put_bytes(&mut plain, &encode_facts(self.semantic.facts()));
-        seal_bytes(&plain, passphrase)
+        // Reuse the cached key only if it was derived from THIS passphrase; a new passphrase
+        // (e.g. `engram rekey`) re-derives with a fresh salt.
+        let reuse = self.seal_key.as_ref().is_some_and(|sk| sk.matches(passphrase));
+        if !reuse {
+            self.seal_key = Some(SealingKey::derive(passphrase)?);
+        }
+        self.seal_key
+            .as_ref()
+            .expect("seal key was just derived if absent")
+            .seal(&plain)
     }
 
     /// Recover a whole memory from a [`seal`](Engram::seal)ed blob with `passphrase` and
@@ -367,7 +388,10 @@ impl<E: Embedder> Engram<E> {
     /// re-embedding every event, so recall resumes immediately. A wrong key or tampering
     /// yields [`StoreError::Decrypt`].
     pub fn open(blob: &[u8], passphrase: &[u8], embedder: E) -> Result<Self, StoreError> {
-        let plain = open_bytes(blob, passphrase)?;
+        // Derive the key from the blob's salt ONCE and keep it, so subsequent seals of this
+        // reopened store skip the Argon2id KDF.
+        let seal_key = SealingKey::for_salt(passphrase, SealingKey::salt_of(blob)?)?;
+        let plain = seal_key.open(blob)?;
         let (clock, off) = take_u64(&plain, 0)?;
         let (episodic_bytes, off) = take_bytes(&plain, off)?;
         let (semantic_bytes, _off) = take_bytes(&plain, off)?;
@@ -390,6 +414,7 @@ impl<E: Embedder> Engram<E> {
             working: WorkingMemory::new(WORKING_HORIZON, WORKING_CAPACITY),
             embedder,
             clock,
+            seal_key: Some(seal_key),
         })
     }
 
@@ -692,6 +717,53 @@ mod tests {
             Engram::open(&[0u8; 8], b"key", VowelEmbedder).err(),
             Some(StoreError::Truncated)
         );
+    }
+
+    #[test]
+    fn open_rejects_a_header_length_blob_at_the_sealing_key_boundary() {
+        // Past the salt (16) but short of salt+nonce (40): SealingKey::open's own bounds check
+        // returns Truncated (a `<`→`false` mutant would proceed and mis-report).
+        assert_eq!(
+            Engram::open(&[0u8; 20], b"key", VowelEmbedder).err(),
+            Some(StoreError::Truncated)
+        );
+        // Exactly 40 bytes IS a full header, so control reaches the AEAD, which rejects the empty
+        // ciphertext → Decrypt. Pins the `<` boundary (not `<=`).
+        assert_eq!(
+            Engram::open(&[0u8; 40], b"key", VowelEmbedder).err(),
+            Some(StoreError::Decrypt)
+        );
+    }
+
+    #[test]
+    fn resealing_with_a_new_passphrase_rekeys_the_store() {
+        // The cached sealing key must NOT be reused when the passphrase changes (the `engram
+        // rekey` path): re-sealing under a new passphrase re-derives, so the result opens with the
+        // NEW passphrase and no longer with the old one. A `==`→`!=` mutant in `matches` would
+        // reuse the old key and this would fail.
+        let sealed = populated().seal(b"old").unwrap();
+        let mut mem = Engram::open(&sealed, b"old", VowelEmbedder).unwrap();
+        let resealed = mem.seal(b"new").unwrap();
+        assert!(Engram::open(&resealed, b"new", VowelEmbedder).is_ok());
+        assert_eq!(
+            Engram::open(&resealed, b"old", VowelEmbedder).err(),
+            Some(StoreError::Decrypt)
+        );
+    }
+
+    #[test]
+    fn resealing_with_the_same_passphrase_round_trips() {
+        // The reuse path (cached key, fresh nonce): sealing twice with the same passphrase both
+        // produce openable blobs, and the second (cached) seal is byte-different only in its nonce.
+        let mut mem = populated();
+        let first = mem.seal(b"pw").unwrap();
+        let second = mem.seal(b"pw").unwrap();
+        assert!(Engram::open(&first, b"pw", VowelEmbedder).is_ok());
+        assert!(Engram::open(&second, b"pw", VowelEmbedder).is_ok());
+        assert_ne!(first, second, "a fresh nonce per seal makes the ciphertext differ");
+        // The cached key is REUSED (no re-derivation), so its salt — the first 16 bytes — is the
+        // same across both seals. If the seal always re-derived, each would draw a fresh salt.
+        assert_eq!(first[..16], second[..16], "reused key keeps the same salt");
     }
 
     #[test]
