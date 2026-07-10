@@ -1,39 +1,49 @@
 {
-  "date": "2026-07-10",
+  "date": "2026-07-11",
   "mode": "standard",
   "domains": ["local-first-agent-memory"],
   "rubric_version": 1,
   "cluster": "local-first-embeddable-agent-memory",
+  "prior_scan": { "date": "2026-07-10", "coverage_pct": 70, "tier": "BEHIND", "gaps_total": 3 },
   "field": [
     { "repo": "matrixorigin/Memoria", "cluster": "direct", "stars": 407, "pushed": "2026-06-29", "lang": "Rust" },
     { "repo": "sqliteai/sqlite-memory", "cluster": "direct", "stars": 81, "pushed": "2026-06-10", "lang": "C" },
     { "repo": "alphaonedev/ai-memory-mcp", "cluster": "direct", "stars": 35, "pushed": "2026-07-10", "lang": "Rust" },
     { "repo": "Perseus-Computing-LLC/perseus-vault", "cluster": "direct", "stars": 18, "pushed": "2026-07-10", "lang": "Rust" },
     { "repo": "sattyamjjain/mnemo", "cluster": "direct", "stars": 3, "pushed": "2026-07-08", "lang": "Rust" },
-    { "repo": "mem0ai/mem0", "cluster": "reference", "stars": 60566, "pushed": "2026-07-10", "lang": "Python" },
-    { "repo": "getzep/graphiti", "cluster": "reference", "stars": 28584, "pushed": "2026-07-09", "lang": "Python" },
-    { "repo": "topoteretes/cognee", "cluster": "reference", "stars": 27544, "pushed": "2026-07-10", "lang": "Python" },
-    { "repo": "letta-ai/letta", "cluster": "reference", "stars": 23734, "pushed": "2026-07-03", "lang": "Python" }
+    { "repo": "edg-l/engram-mcp", "cluster": "direct", "note": "newly surfaced; not deep-profiled — Rust, local ONNX embeddings, SQLite-backed semantic search", "lang": "Rust" },
+    { "repo": "mem0ai/mem0", "cluster": "reference", "stars": 60569, "pushed": "2026-07-10", "lang": "Python" },
+    { "repo": "getzep/graphiti", "cluster": "reference", "stars": 28584, "lang": "Python" },
+    { "repo": "topoteretes/cognee", "cluster": "reference", "stars": 27544, "lang": "Python" },
+    { "repo": "letta-ai/letta", "cluster": "reference", "stars": 23734, "lang": "Python" }
   ],
+  "field_note": "Direct comparators unchanged since 2026-07-10 (same-day prior scan); light re-scan surfaced additional small local-first peers (edg-l/engram-mcp, Memorized, memory-mcp, Vestige, CaliLuke/rusty-mcp) — all ship local embeddings + SQLite, reinforcing those as cluster table-stakes. Field not re-saturated.",
   "matrix": [
     { "id": "remember-recall-forget", "us": "met", "tier": "table-stakes" },
     { "id": "mcp-server", "us": "met", "tier": "table-stakes" },
     { "id": "hybrid-retrieval", "us": "met", "tier": "table-stakes" },
-    { "id": "bundled-semantic-embeddings", "us": "missing", "tier": "table-stakes" },
+    { "id": "bundled-semantic-embeddings", "us": "met", "tier": "table-stakes", "was": "missing", "evidence": "src/model_embed.rs (all-MiniLM-L6-v2 via candle) + weighted fusion; benches/recall.rs R@5 0.731" },
     { "id": "contradiction-resolution", "us": "met", "tier": "table-stakes" },
     { "id": "forgetting-decay", "us": "met", "tier": "table-stakes" },
     { "id": "encryption-at-rest", "us": "met", "tier": "table-stakes" },
-    { "id": "incremental-persistence", "us": "missing", "tier": "table-stakes" },
-    { "id": "standard-recall-benchmark", "us": "missing", "tier": "table-stakes" },
+    { "id": "incremental-persistence", "us": "missing", "tier": "table-stakes", "note": "still whole-blob re-encode per write, so literally not incremental — but the dominant cost (Argon2id-per-write) was eliminated via a cached SealingKey (~120x faster writes: ~287ms -> ~2.4ms). Severity much reduced; true append-only storage remains." },
+    { "id": "standard-recall-benchmark", "us": "met", "tier": "table-stakes", "was": "missing", "evidence": "benches/recall.rs (R@k harness, cited numbers) + benches/scale.rs" },
     { "id": "install-docs", "us": "met", "tier": "table-stakes" },
     { "id": "bitemporal-history", "us": "partial", "tier": "edge" },
     { "id": "language-sdks", "us": "partial", "tier": "edge" },
     { "id": "egress-privacy-tier", "us": "met", "tier": "edge" },
     { "id": "proven-correctness", "us": "met", "tier": "edge" }
   ],
-  "coverage": { "met": 7, "total": 10, "pct": 70 },
-  "tier": "BEHIND",
-  "gaps_total": 3,
-  "leads": ["egress-privacy-tier", "proven-correctness", "contradiction-resolution (deterministic, no LLM)"],
-  "notes": "engram is FRONTIER on its two differentiators — a structurally-enforced egress privacy tier (no direct peer enforces this; Perseus's is an unenforced tag, Memoria's a PII scrubber, ai-memory's tier-selection, mnemo's an ACL scope) and mutation-proven correctness (no peer claims it). The 3 table-stakes gaps are all downstream of one root: no bundled semantic embedder (the default HashEmbedder is non-semantic), which also blocks a meaningful recall benchmark."
+  "coverage": { "met": 9, "total": 10, "pct": 90 },
+  "tier": "COMPETITIVE",
+  "gaps_total": 1,
+  "since_last_scan": {
+    "coverage": "70% -> 90% (+2 met)",
+    "tier": "BEHIND -> COMPETITIVE",
+    "newly_met": ["bundled-semantic-embeddings", "standard-recall-benchmark"],
+    "improved_not_met": ["incremental-persistence (KDF-per-write eliminated, ~120x faster; still whole-blob)"],
+    "field": "core direct comparators unchanged; several small local-first peers newly surfaced"
+  },
+  "leads": ["egress-privacy-tier", "proven-correctness", "contradiction-resolution (deterministic)"],
+  "notes": "engram moved BEHIND -> COMPETITIVE by closing the two gaps that traced to one root (no semantic embedder): a real in-process embedder + dense-weighted fusion (+34.6pt R@5 measured) and a reproducible recall benchmark. The one remaining table-stakes gap is genuinely-incremental persistence; its dominant cost is already gone. engram still leads the whole cluster on a structurally-enforced egress privacy tier and mutation-proven correctness — no peer has either."
 }
