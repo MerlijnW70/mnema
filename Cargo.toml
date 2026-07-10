@@ -37,3 +37,9 @@ required-features = ["secure"]
 [[bench]]
 name = "engram"
 harness = false
+
+# On-demand scale sweep: how exact vs IVF latency and recall move as the corpus grows.
+# Not part of the fitness signal (it is slow); run explicitly with `cargo bench --bench scale`.
+[[bench]]
+name = "scale"
+harness = false
