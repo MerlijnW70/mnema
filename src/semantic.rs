@@ -89,6 +89,9 @@ impl SemanticStore {
 
     /// Rebuild a store from previously-serialized facts (e.g. the facade's `open`),
     /// preserving their order, statuses, and confidences verbatim.
+    // Only the `secure` facade deserializes facts; in a build without it (e.g. `local-embed`
+    // alone) this is legitimately unused — silence the lint there rather than everywhere.
+    #[cfg_attr(not(feature = "secure"), allow(dead_code))]
     pub(crate) fn from_facts(facts: Vec<Fact>) -> Self {
         Self { facts }
     }
