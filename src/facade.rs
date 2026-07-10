@@ -26,6 +26,10 @@ use crate::{BundleItem, Destination, EgressTier, Memory, MemoryId, MemoryKind};
 const WORKING_HORIZON: u64 = 32;
 /// Default scratchpad capacity: at most this many notes at once.
 const WORKING_CAPACITY: usize = 16;
+/// Lloyd iterations for [`build_ann`](Engram::build_ann)'s k-means anchor training — enough to
+/// settle the centroids on typical corpora; bounded so building the index stays fast and O(1) in
+/// rounds regardless of corpus size.
+const ANN_KMEANS_ITERS: usize = 10;
 
 /// A batteries-included local-first memory layer over a pluggable [`Embedder`].
 pub struct Engram<E: Embedder> {
@@ -202,10 +206,14 @@ impl<E: Embedder> Engram<E> {
     }
 
     /// Build the approximate (IVF) index over the current corpus, enabling
-    /// [`recall_fast`](Engram::recall_fast). `num_anchors` buckets are seeded from the
-    /// first `num_anchors` memories' embeddings (a deterministic placeholder for a
-    /// future k-means); every memory is then bucketed. Call again to rebuild after the
-    /// corpus changes — the exact index stays the source of truth either way.
+    /// [`recall_fast`](Engram::recall_fast). `num_anchors` buckets are seeded by
+    /// **deterministic k-means** over the corpus embeddings ([`kmeans_anchors`]), so the
+    /// anchors sit at the data's real cluster centres and the IVF recovers far more of the
+    /// exact top-k than arbitrarily-seeded anchors would; every memory is then bucketed. Call
+    /// again to rebuild after the corpus changes — the exact index stays the source of truth
+    /// either way.
+    ///
+    /// [`kmeans_anchors`]: crate::vector::kmeans_anchors
     pub fn build_ann(&mut self, num_anchors: usize) {
         let vectors: Vec<(MemoryId, Vec<f32>)> = self
             .episodic
@@ -213,11 +221,8 @@ impl<E: Embedder> Engram<E> {
             .iter()
             .map(|e| (e.id, self.embedder.embed(&e.content)))
             .collect();
-        let anchors: Vec<Vec<f32>> = vectors
-            .iter()
-            .take(num_anchors)
-            .map(|(_, v)| v.clone())
-            .collect();
+        let corpus: Vec<Vec<f32>> = vectors.iter().map(|(_, v)| v.clone()).collect();
+        let anchors = crate::vector::kmeans_anchors(&corpus, num_anchors, ANN_KMEANS_ITERS);
         let mut ann = IvfIndex::new(self.embedder.dims(), anchors);
         for (id, v) in vectors {
             let _ = ann.insert(id, v);
