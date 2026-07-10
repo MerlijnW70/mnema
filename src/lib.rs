@@ -333,6 +333,22 @@ mod tests {
     }
 
     #[test]
+    fn budget_keeps_scanning_past_an_over_budget_item() {
+        // Recency order: costs 2, 5, 2 with budget 4. The middle item overflows and must be
+        // SKIPPED while scanning continues, so the last (smaller) item still fits. A `break`
+        // instead of `continue` would stop at the overflow and drop the third item.
+        let mems = vec![
+            mem(3, EgressTier::Open, 1, "cc"),    // oldest, cost 2
+            mem(2, EgressTier::Open, 2, "bbbbb"), // middle, cost 5 — overflows
+            mem(1, EgressTier::Open, 3, "aa"),    // newest, cost 2
+        ];
+        let bundle = assemble_bundle(&mems, Destination::Local, 4);
+        let ids: Vec<MemoryId> = bundle.iter().map(|b| b.id).collect();
+        // Newest (1, cost 2) fits, middle (2, cost 5) is skipped, oldest (3, cost 2) still fits.
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
     fn tier_rank_orders_open_below_redacted_below_private() {
         assert!(EgressTier::Open.rank() < EgressTier::Redacted.rank());
         assert!(EgressTier::Redacted.rank() < EgressTier::Private.rank());
