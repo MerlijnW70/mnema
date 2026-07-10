@@ -47,7 +47,8 @@ pub struct Scored {
 #[derive(Clone, Debug, Default)]
 pub struct VectorIndex {
     dims: usize,
-    entries: Vec<(MemoryId, Vec<f32>)>,
+    /// `(id, vector, ‖vector‖)` — the norm is cached at insert so a query never recomputes it.
+    entries: Vec<(MemoryId, Vec<f32>, f32)>,
 }
 
 impl VectorIndex {
@@ -75,7 +76,8 @@ impl VectorIndex {
         if vector.len() != self.dims {
             return Err(VectorError::DimMismatch);
         }
-        self.entries.push((id, vector));
+        let vn = norm(&vector);
+        self.entries.push((id, vector, vn));
         Ok(())
     }
 
@@ -84,7 +86,7 @@ impl VectorIndex {
     /// surfaced by a later search.
     pub fn remove(&mut self, id: MemoryId) -> usize {
         let before = self.entries.len();
-        self.entries.retain(|(entry_id, _)| *entry_id != id);
+        self.entries.retain(|(entry_id, _, _)| *entry_id != id);
         before - self.entries.len()
     }
 
@@ -95,12 +97,13 @@ impl VectorIndex {
         if query.len() != self.dims {
             return Vec::new();
         }
+        let qn = norm(query);
         let mut scored: Vec<Scored> = self
             .entries
             .iter()
-            .map(|(id, v)| Scored {
+            .map(|(id, v, vn)| Scored {
                 id: *id,
-                score: cosine(query, v),
+                score: cosine_pre(query, qn, v, *vn),
             })
             .collect();
         // Descending by score, ties broken by ascending id — a *total* order independent
@@ -134,7 +137,9 @@ impl VectorIndex {
 pub struct IvfIndex {
     dims: usize,
     anchors: Vec<Vec<f32>>,
-    buckets: Vec<Vec<(MemoryId, Vec<f32>)>>,
+    /// Each bucket holds `(id, vector, ‖vector‖)` — the norm is cached at insert (as in
+    /// [`VectorIndex`]) so a probed vector is scored without recomputing its magnitude.
+    buckets: Vec<Vec<(MemoryId, Vec<f32>, f32)>>,
 }
 
 impl IvfIndex {
@@ -165,7 +170,8 @@ impl IvfIndex {
             return Err(VectorError::DimMismatch);
         }
         let bucket = self.nearest_anchor(&vector).ok_or(VectorError::NoAnchors)?;
-        self.buckets[bucket].push((id, vector));
+        let vn = norm(&vector);
+        self.buckets[bucket].push((id, vector, vn));
         Ok(())
     }
 
@@ -199,12 +205,13 @@ impl IvfIndex {
             .collect();
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
+        let qn = norm(query);
         let mut scored: Vec<Scored> = Vec::new();
         for (bucket, _) in ranked.iter().take(probe) {
-            for (id, v) in &self.buckets[*bucket] {
+            for (id, v, vn) in &self.buckets[*bucket] {
                 scored.push(Scored {
                     id: *id,
-                    score: cosine(query, v),
+                    score: cosine_pre(query, qn, v, *vn),
                 });
             }
         }
@@ -280,8 +287,28 @@ fn nearest_centroid(v: &[f32], centroids: &[Vec<f32>]) -> usize {
     best
 }
 
+/// L2 magnitude `√(Σ xᵢ²)`. Precomputed once per stored vector (and once per query) so that
+/// scoring a candidate is a dot product plus a division, instead of re-deriving both
+/// magnitudes on every comparison — the same arithmetic as [`cosine`], just not repeated.
+fn norm(v: &[f32]) -> f32 {
+    v.iter().map(|x| x * x).sum::<f32>().sqrt()
+}
+
+/// Cosine similarity from precomputed norms: `dot / (na · nb)`, guarding a zero magnitude to
+/// `0.0` exactly as [`cosine`] does. Bit-identical to `cosine(a, b)` when `na == norm(a)` and
+/// `nb == norm(b)` — the norms are the only thing hoisted out of the inner loop.
+fn cosine_pre(a: &[f32], na: f32, b: &[f32], nb: f32) -> f32 {
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+        dot / (na * nb)
+    }
+}
+
 /// Cosine similarity of two equal-length vectors, in `[-1, 1]`. Returns `0.0` when
-/// either vector has zero magnitude (the angle is undefined) rather than `NaN`.
+/// either vector has zero magnitude (the angle is undefined) rather than `NaN`. Used where a
+/// norm is not worth caching (anchor ranking, k-means); the query hot path uses [`cosine_pre`].
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -542,6 +569,20 @@ mod tests {
         let cs = kmeans_anchors(&data, 2, 3);
         assert_eq!(cs.len(), 2);
         assert_eq!(cs[1], vec![1.0, 0.0], "empty cluster kept its centroid (no NaN)");
+    }
+
+    #[test]
+    fn cosine_pre_equals_cosine_and_guards_a_zero_norm_on_either_side() {
+        let a = [1.0, 2.0, 3.0];
+        let b = [3.0, 2.0, 1.0];
+        let zero = [0.0, 0.0, 0.0];
+        // With true norms it is bit-identical to `cosine` (pins that `norm` is √Σx², and that
+        // the hot path did not change any score).
+        assert_eq!(cosine_pre(&a, norm(&a), &b, norm(&b)), cosine(&a, &b));
+        // A zero magnitude on EITHER side yields 0.0, never NaN — pins the guard and the `||`
+        // (a `&&` or a dropped guard would divide by zero here).
+        assert_eq!(cosine_pre(&a, norm(&a), &zero, norm(&zero)), 0.0);
+        assert_eq!(cosine_pre(&zero, norm(&zero), &a, norm(&a)), 0.0);
     }
 
     #[test]
