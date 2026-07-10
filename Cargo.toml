@@ -70,3 +70,9 @@ harness = false
 [[bench]]
 name = "scale"
 harness = false
+
+# Recall-quality R@k: lexical vs semantic+weighted retrieval over paraphrase queries.
+# Run with `cargo bench --bench recall --features secure,local-embed`.
+[[bench]]
+name = "recall"
+harness = false
