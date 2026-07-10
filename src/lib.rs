@@ -62,6 +62,31 @@ pub enum EgressTier {
     Private,
 }
 
+impl EgressTier {
+    /// Restrictiveness rank, least to most: `Open < Redacted < Private`.
+    #[must_use]
+    pub fn rank(self) -> u8 {
+        match self {
+            EgressTier::Open => 0,
+            EgressTier::Redacted => 1,
+            EgressTier::Private => 2,
+        }
+    }
+
+    /// The more restrictive of two tiers — used to combine tiers *fail-closed* (e.g. when a
+    /// belief is reasserted at a different tier, the tighter one wins so privacy never
+    /// silently relaxes). A total match rather than a rank comparison, so `Private` on
+    /// either side always wins and there is no boundary operator to get subtly wrong.
+    #[must_use]
+    pub fn most_restrictive(self, other: EgressTier) -> EgressTier {
+        match (self, other) {
+            (EgressTier::Private, _) | (_, EgressTier::Private) => EgressTier::Private,
+            (EgressTier::Redacted, _) | (_, EgressTier::Redacted) => EgressTier::Redacted,
+            (EgressTier::Open, EgressTier::Open) => EgressTier::Open,
+        }
+    }
+}
+
 /// What the egress filter decided for one memory against one destination.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EgressDecision {
@@ -305,5 +330,22 @@ mod tests {
     fn a_zero_budget_admits_nothing() {
         let mems = vec![mem(1, EgressTier::Open, 1, "x")];
         assert!(assemble_bundle(&mems, Destination::Local, 0).is_empty());
+    }
+
+    #[test]
+    fn tier_rank_orders_open_below_redacted_below_private() {
+        assert!(EgressTier::Open.rank() < EgressTier::Redacted.rank());
+        assert!(EgressTier::Redacted.rank() < EgressTier::Private.rank());
+    }
+
+    #[test]
+    fn most_restrictive_keeps_the_tighter_tier_either_way() {
+        use EgressTier::*;
+        // The tighter tier wins regardless of argument order (fail-closed, commutative).
+        assert_eq!(Open.most_restrictive(Private), Private);
+        assert_eq!(Private.most_restrictive(Open), Private);
+        assert_eq!(Open.most_restrictive(Redacted), Redacted);
+        assert_eq!(Redacted.most_restrictive(Redacted), Redacted);
+        assert_eq!(Open.most_restrictive(Open), Open);
     }
 }

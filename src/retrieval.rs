@@ -76,7 +76,13 @@ pub fn rrf_fuse(rankings: &[Vec<MemoryId>]) -> Vec<Fused> {
 /// (a cheap lexical signal). Only memories with at least one shared term are returned;
 /// ties keep input order (the sort is stable).
 pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
-    let terms = tokenize(query);
+    // De-duplicate the query terms: the score is the count of *distinct* query terms a
+    // memory contains, so `"dog dog cat"` must not score a "dog" memory twice and outrank
+    // an equally-relevant "cat" memory (the terms are iterated and counted, unlike the
+    // content tokens which are only membership-tested).
+    let mut terms = tokenize(query);
+    terms.sort();
+    terms.dedup();
     let mut scored: Vec<(MemoryId, usize)> = memories
         .iter()
         .filter_map(|m| {
@@ -93,9 +99,10 @@ pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
     scored.into_iter().map(|(id, _)| id).collect()
 }
 
-/// Lowercase, split on non-alphanumeric, drop empties. Distinct-preserving is not
-/// needed — `keyword_rank` counts distinct query terms, and duplicates in a term list
-/// only re-confirm a match.
+/// Lowercase, split on non-alphanumeric, drop empties. Callers that *count* the tokens
+/// (the query side of `keyword_rank`) must de-duplicate first, since a repeated token
+/// would otherwise be counted more than once; callers that only membership-test them
+/// (the content side) need not.
 fn tokenize(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -276,6 +283,20 @@ mod tests {
     fn keyword_rank_is_case_insensitive_and_tokenized() {
         let mems = vec![mem(1, EgressTier::Open, 1, "The CAT, sat!")];
         assert_eq!(keyword_rank("cat", &mems), vec![1]);
+    }
+
+    #[test]
+    fn keyword_rank_counts_distinct_terms_not_repetitions() {
+        // The query `"dog dog cat"` shares the DISTINCT terms {dog, cat}. A "cat"-only and
+        // a "dog"-only memory therefore tie at overlap 1. If the duplicate "dog" were
+        // double-counted, the dog memory would score 2 and jump ahead — so ordering the
+        // cat memory first in input and asserting it stays first pins the dedup:
+        //   correct → tie, input order [1, 2];  double-counting → [2, 1].
+        let mems = vec![
+            mem(1, EgressTier::Open, 2, "cat and mouse"), // distinct overlap {cat} → 1
+            mem(2, EgressTier::Open, 1, "the dog"),       // distinct overlap {dog} → 1 (was 2)
+        ];
+        assert_eq!(keyword_rank("dog dog cat", &mems), vec![1, 2]);
     }
 
     #[test]

@@ -29,7 +29,10 @@ impl HashEmbedder {
     /// drift apart on. See ADR-0023.
     pub const DEFAULT_DIMS: usize = 128;
 
-    /// A new embedder producing `dims`-dimensional vectors.
+    /// A new embedder producing `dims`-dimensional vectors. `dims == 0` is a degenerate
+    /// embedder that maps every text to the empty vector (see [`embed`](HashEmbedder::embed)) —
+    /// it never panics, but it also carries no signal, so use [`DEFAULT_DIMS`](HashEmbedder::DEFAULT_DIMS)
+    /// unless you have a reason not to.
     pub fn new(dims: usize) -> Self {
         Self { dims }
     }
@@ -41,6 +44,12 @@ impl Embedder for HashEmbedder {
     }
 
     fn embed(&self, text: &str) -> Vec<f32> {
+        // A zero-width embedder has no bucket to land a token in; `h % 0` would panic, so
+        // fall through to the empty vector rather than divide by zero. (The default width
+        // is DEFAULT_DIMS; this only guards the degenerate `new(0)`.)
+        if self.dims == 0 {
+            return Vec::new();
+        }
         let mut v = vec![0.0f32; self.dims];
         for token in text
             .to_lowercase()
@@ -85,6 +94,16 @@ mod tests {
     fn embedding_is_case_insensitive_and_punctuation_split() {
         let e = HashEmbedder::new(16);
         assert_eq!(e.embed("Cat, DOG!"), e.embed("cat dog"));
+    }
+
+    #[test]
+    fn a_zero_width_embedder_yields_the_empty_vector_without_panicking() {
+        // `new(0)` used to panic on the first token (`h % 0`); it must now be a total,
+        // signal-free embedder instead — no divide-by-zero on any input.
+        let e = HashEmbedder::new(0);
+        assert_eq!(e.dims(), 0);
+        assert!(e.embed("anything at all").is_empty());
+        assert!(e.embed("").is_empty());
     }
 
     #[test]

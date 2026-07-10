@@ -37,14 +37,27 @@ impl WorkingMemory {
     }
 
     /// Write a note observed at logical time `at`. If this pushes the store past
-    /// `capacity`, the oldest note is evicted (append order is time order).
+    /// `capacity`, the note with the smallest `at` (the oldest *by time*) is evicted.
+    /// This is time-based, not position-based, so an out-of-order write never evicts a
+    /// genuinely newer note — `at` is caller-supplied and not required to be monotonic.
     pub fn note(&mut self, at: u64, content: impl Into<String>) {
         self.notes.push(Note {
             at,
             content: content.into(),
         });
         if self.notes.len() > self.capacity {
-            self.notes.remove(0);
+            // Evict the oldest by timestamp; on a tie the earliest-inserted such note goes
+            // (`min_by_key` keeps the first minimum), matching the append-order behaviour
+            // when timestamps are monotonic.
+            if let Some(oldest) = self
+                .notes
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, n)| n.at)
+                .map(|(i, _)| i)
+            {
+                self.notes.remove(oldest);
+            }
         }
     }
 
@@ -53,14 +66,16 @@ impl WorkingMemory {
         now.saturating_sub(at) <= self.horizon
     }
 
-    /// The notes still live at `now`, newest first, without mutating.
+    /// The notes still live at `now`, newest first (by `at`), without mutating. Ordering
+    /// is by timestamp — not insertion position — so an out-of-order write still sorts
+    /// correctly; equal timestamps keep insertion order (the sort is stable).
     pub fn active(&self, now: u64) -> Vec<&Note> {
         let mut live: Vec<&Note> = self
             .notes
             .iter()
             .filter(|n| self.is_live(n.at, now))
             .collect();
-        live.reverse(); // notes are in time order; newest first for recall
+        live.sort_by_key(|n| std::cmp::Reverse(n.at)); // newest first, stable on ties
         live
     }
 
@@ -129,6 +144,22 @@ mod tests {
         w.note(3, "c"); // pushes past capacity 2 → "a" evicted
         assert_eq!(w.len(), 2);
         assert_eq!(contents(&w.active(3)), vec!["c", "b"]);
+    }
+
+    #[test]
+    fn eviction_and_ordering_are_by_time_not_insertion_order() {
+        // `at` is caller-supplied and need not be monotonic. With an out-of-order write,
+        // the genuinely oldest note (by time) must be evicted — not merely the first
+        // inserted — and `active` must still order newest-first by timestamp.
+        let mut w = WorkingMemory::new(100, 2);
+        w.note(10, "ten");
+        w.note(20, "twenty");
+        w.note(5, "five"); // over capacity: the oldest BY TIME is "five"@5 — but so far
+        // len is 3 > 2, so one is evicted. The oldest by time among {10,20,5} is 5.
+        assert_eq!(w.len(), 2);
+        // "five"@5 is evicted (position-based eviction would have wrongly dropped "ten"@10).
+        let live = contents(&w.active(100));
+        assert_eq!(live, vec!["twenty", "ten"]); // newest-first by `at`, not by insertion
     }
 
     #[test]
