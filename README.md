@@ -103,7 +103,7 @@ export ENGRAM_KEY="your-passphrase"
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the full architecture, threat model, and phased build plan.
 - [`docs/adr/`](docs/adr/) — the architecture decisions: the dependency budget (0020), the egress
-  wall (0021), and memory-augmented self-evolution (0022).
+  wall (0021), memory-augmented self-evolution (0022), and whole-store-seal persistence (0024).
 - [`docs/NARRATIVE.md`](docs/NARRATIVE.md) — the story of building it under a mutation ratchet.
 - [`docs/README.md`](docs/README.md) — how to read the docs (and where cross-references point).
 

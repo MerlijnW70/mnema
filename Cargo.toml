@@ -76,3 +76,9 @@ harness = false
 [[bench]]
 name = "recall"
 harness = false
+
+# Persistence cost: whole-store seal() latency vs N (see ADR-0024).
+# Run with `cargo bench --bench persist --features secure`.
+[[bench]]
+name = "persist"
+harness = false
