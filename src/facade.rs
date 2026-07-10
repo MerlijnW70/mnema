@@ -88,6 +88,25 @@ impl<E: Embedder> Engram<E> {
         id
     }
 
+    /// Store a `Redacted`-tier episodic memory: `content` is kept locally, but a `Remote`
+    /// bundle emits `redacted` in its place (the egress filter's `Redact` decision). This is
+    /// the only way to attach a real redacted surface — [`remember`](Engram::remember) leaves
+    /// it empty, so a `Redacted` memory made that way would emit nothing remotely.
+    pub fn remember_redacted(&mut self, content: &str, redacted: &str) -> MemoryId {
+        let at = self.tick();
+        let vector = self.embedder.embed(content);
+        let id = self.episodic.append_redacted(
+            MemoryKind::Episodic,
+            EgressTier::Redacted,
+            at,
+            1.0,
+            content,
+            redacted,
+        );
+        let _ = self.index.insert(id, vector);
+        id
+    }
+
     /// Assert a semantic fact at tier [`EgressTier::Open`], resolving contradictions.
     pub fn remember_fact(&mut self, subject: &str, attribute: &str, value: &str) -> Resolution {
         self.remember_fact_tiered(subject, attribute, value, EgressTier::Open)
@@ -640,6 +659,29 @@ mod tests {
             Engram::open(&[0u8; 8], b"key", VowelEmbedder).err(),
             Some(StoreError::Truncated)
         );
+    }
+
+    #[test]
+    fn a_redacted_memory_emits_its_surface_remotely_and_full_content_locally() {
+        let mut e = Engram::new(VowelEmbedder);
+        e.remember_redacted("card 4111 1111 1111 1111", "card [redacted]");
+        // Remote sees the surface, never the full content...
+        let remote = e.recall_recent(Destination::Remote, 1_000);
+        assert_eq!(remote.len(), 1);
+        assert_eq!(remote[0].text, "card [redacted]");
+        assert!(!remote[0].text.contains("4111"));
+        // ...local sees the full content.
+        let local = e.recall_recent(Destination::Local, 1_000);
+        assert_eq!(local[0].text, "card 4111 1111 1111 1111");
+    }
+
+    #[test]
+    fn a_redacted_surface_survives_seal_and_open() {
+        let mut e = Engram::new(VowelEmbedder);
+        e.remember_redacted("secret detail", "surface");
+        let sealed = e.seal(b"key").unwrap();
+        let reopened = Engram::open(&sealed, b"key", VowelEmbedder).unwrap();
+        assert_eq!(reopened.recall_recent(Destination::Remote, 1_000)[0].text, "surface");
     }
 
     #[test]
