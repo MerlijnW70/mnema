@@ -145,6 +145,7 @@ pub struct BundleItem {
 /// This is an enum match with no mutable operators, so the prober finds nothing to
 /// flip here directly (a total function with no mutation site) — the invariant earns its proof one
 /// layer up, in [`assemble_bundle`], where the deny branch meets real arithmetic.
+#[must_use]
 pub fn egress_decision(tier: EgressTier, dest: Destination) -> EgressDecision {
     match (tier, dest) {
         (EgressTier::Open, _) => EgressDecision::Allow,
@@ -163,6 +164,7 @@ pub fn egress_decision(tier: EgressTier, dest: Destination) -> EgressDecision {
 /// reaches a `Remote` bundle. Mutating the recency order, the budget accumulation,
 /// or the fit test must break a test below — that is what makes the contract
 /// *proven*, not merely asserted.
+#[must_use]
 pub fn assemble_bundle(
     memories: &[Memory],
     dest: Destination,
