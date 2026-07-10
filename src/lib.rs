@@ -34,6 +34,12 @@ pub mod vector;
 /// so the layer is usable out of the box (ADR-0012 "own your hasher" discipline).
 pub mod embed;
 
+/// A real in-process semantic `Embedder` (all-MiniLM-L6-v2 via candle), behind the opt-in
+/// `local-embed` feature. Model glue below the behavioral waterline — its pooling math is in
+/// [`embed`] and is probed; the transformer itself is not.
+#[cfg(feature = "local-embed")]
+pub mod model_embed;
+
 /// Hybrid retrieval (Phase 2b): reciprocal-rank fusion of vector + recency + keyword
 /// rankings into one `recall`, routed through the egress filter (proposal §3.3).
 pub mod retrieval;

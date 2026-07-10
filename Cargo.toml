@@ -15,11 +15,33 @@ chacha20poly1305 = { version = "0.10", optional = true }
 argon2 = { version = "0.5", optional = true }
 getrandom = { version = "0.2", optional = true }
 
+# The `local-embed` feature (a real in-process semantic embedder): sentence-transformers
+# all-MiniLM-L6-v2 run via candle (pure Rust — no Python, no ONNX C++ runtime). OPT-IN and
+# heavyweight by design, so the zero-dependency core stays untouched; only enable it when you
+# want semantic recall out of the box instead of bringing your own `Embedder`.
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+candle-transformers = { version = "0.9", optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+hf-hub = { version = "0.4", optional = true }
+serde_json = { version = "1", optional = true }
+
 [features]
 # `secure` = encryption at rest (Argon2id + XChaCha20-Poly1305) for the episodic store
 # and the whole-`Engram` seal/open, plus the `Engram` facade, the `engram` CLI, and the
 # memory_demo example.
 secure = ["dep:chacha20poly1305", "dep:argon2", "dep:getrandom"]
+
+# `local-embed` = a bundled real semantic embedder (all-MiniLM-L6-v2 via candle). Weights are
+# downloaded + cached from Hugging Face on first use. See `src/model_embed.rs`.
+local-embed = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:tokenizers",
+    "dep:hf-hub",
+    "dep:serde_json",
+]
 
 # The `engram` CLI (remember/recall/fact/stats over an encrypted store) — needs the
 # encrypted facade, hence the `secure` feature.
@@ -32,6 +54,11 @@ required-features = ["secure"]
 [[example]]
 name = "memory_demo"
 required-features = ["secure"]
+
+# Proof the bundled semantic embedder captures meaning (downloads all-MiniLM-L6-v2).
+[[example]]
+name = "semantic_embed"
+required-features = ["local-embed"]
 
 # Channel-B style bench: exact vs approximate (IVF) vector recall — latency + recall.
 [[bench]]
