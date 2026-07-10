@@ -64,11 +64,59 @@ pub struct Fused {
 /// scores the sum over lists of `1 / (RRF_K + rank)`, with `rank` 1-based. Ids are
 /// de-duplicated (their contributions summed) and returned highest-score first.
 pub fn rrf_fuse(rankings: &[Vec<MemoryId>]) -> Vec<Fused> {
+    let weighted: Vec<(f32, &[MemoryId])> = rankings.iter().map(|r| (1.0, r.as_slice())).collect();
+    rrf_fuse_weighted(&weighted)
+}
+
+/// Per-retriever weights for hybrid fusion — how much each retriever's opinion counts. Each
+/// retriever's reciprocal-rank contribution is scaled by its weight, so a caller can make the
+/// dense (embedding) retriever outvote the lexical and recency ones. [`Default`] is all-`1.0`
+/// (the balanced fusion `rrf_fuse` gives); [`semantic`](RetrievalWeights::semantic) tips it
+/// toward meaning.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RetrievalWeights {
+    /// Weight of the dense/embedding retriever (semantic similarity).
+    pub dense: f32,
+    /// Weight of the recency retriever (newest first).
+    pub recency: f32,
+    /// Weight of the keyword retriever (lexical overlap).
+    pub keyword: f32,
+}
+
+impl Default for RetrievalWeights {
+    fn default() -> Self {
+        Self {
+            dense: 1.0,
+            recency: 1.0,
+            keyword: 1.0,
+        }
+    }
+}
+
+impl RetrievalWeights {
+    /// Favor the dense (embedding) retriever over lexical + recency, so a real semantic
+    /// embedder's meaning-match wins over a memory that merely shares a word or is newer. Only
+    /// worthwhile with a semantic embedder — with the lexical `HashEmbedder` the dense signal is
+    /// mostly noise, so prefer [`Default`](RetrievalWeights::default) there.
+    #[must_use]
+    pub fn semantic() -> Self {
+        Self {
+            dense: 4.0,
+            recency: 1.0,
+            keyword: 1.0,
+        }
+    }
+}
+
+/// Weighted reciprocal-rank fusion: like [`rrf_fuse`], but each ranking carries a weight that
+/// scales its `1 / (RRF_K + rank)` contribution. A memory's fused score is the weighted sum of
+/// its contributions across the lists it appears in. `rrf_fuse` is the all-`1.0` special case.
+pub fn rrf_fuse_weighted(rankings: &[(f32, &[MemoryId])]) -> Vec<Fused> {
     let mut acc: Vec<Fused> = Vec::new();
-    for list in rankings {
+    for (weight, list) in rankings {
         for (pos, id) in list.iter().enumerate() {
             let rank = pos as f32 + 1.0;
-            let contribution = 1.0 / (RRF_K + rank);
+            let contribution = weight / (RRF_K + rank);
             match acc.iter_mut().find(|f| f.id == *id) {
                 Some(f) => f.score += contribution,
                 None => acc.push(Fused {
@@ -139,6 +187,7 @@ pub fn hybrid_recall(
     per_retriever: usize,
     char_budget: usize,
     decay: Option<Decay>,
+    weights: RetrievalWeights,
 ) -> Vec<BundleItem> {
     let query_vec = embedder.embed(query);
     let vector_rank: Vec<MemoryId> = index
@@ -154,6 +203,7 @@ pub fn hybrid_recall(
         per_retriever,
         char_budget,
         decay,
+        weights,
     )
 }
 
@@ -171,6 +221,7 @@ pub fn fuse_and_pack(
     per_retriever: usize,
     char_budget: usize,
     decay: Option<Decay>,
+    weights: RetrievalWeights,
 ) -> Vec<BundleItem> {
     let mut by_recency: Vec<&Memory> = memories.iter().collect();
     by_recency.sort_by_key(|b| std::cmp::Reverse(b.at));
@@ -185,7 +236,12 @@ pub fn fuse_and_pack(
         .take(per_retriever)
         .collect();
 
-    let mut fused = rrf_fuse(&[vector_rank.to_vec(), recency_rank, keyword]);
+    // Weighted fusion: the dense/recency/keyword lists each vote with their configured weight.
+    let mut fused = rrf_fuse_weighted(&[
+        (weights.dense, vector_rank),
+        (weights.recency, &recency_rank),
+        (weights.keyword, &keyword),
+    ]);
 
     // One id→memory map for the (up to two) resolution passes below, so each is an O(1)
     // lookup instead of an O(fused·N) linear scan over the whole corpus per query.
@@ -333,6 +389,7 @@ mod tests {
             10,
             1_000,
             None,
+            RetrievalWeights::default(),
         );
         // "dog" wins on both the keyword and recency retrievers, so memory 2 must be
         // the TOP hit — and its item must carry memory 2's own content (a mis-resolved
@@ -365,6 +422,7 @@ mod tests {
             10,
             1_000,
             None,
+            RetrievalWeights::default(),
         );
         assert!(remote.iter().all(|b| b.id != 2));
         assert!(remote.iter().all(|b| !b.text.contains("secret")));
@@ -379,6 +437,7 @@ mod tests {
             10,
             1_000,
             None,
+            RetrievalWeights::default(),
         );
         assert!(
             local
@@ -420,6 +479,7 @@ mod tests {
             10,
             1_000,
             decay,
+            RetrievalWeights::default(),
         );
         // Memory 1 is ~99 ticks old (weight ≈ 0.5^9.9); memory 2 is fresh — it wins.
         assert_eq!(bundle[0].id, 2);
@@ -451,6 +511,7 @@ mod tests {
             10,
             1_000,
             decay,
+            RetrievalWeights::default(),
         );
         // 10× importance overwhelms memory 1's slight stable-tie edge.
         assert_eq!(bundle[0].id, 2);
@@ -484,10 +545,44 @@ mod tests {
         idx.insert(2, embedder.embed("bcd")).unwrap();
         let bundle = hybrid_recall(
             "aei", &mems, &idx, &embedder, Destination::Local, 1, 1_000, None,
+            RetrievalWeights::default(),
         );
         assert!(
             bundle.iter().any(|b| b.id == 1),
             "the embedding-only match must be recalled via the dense retriever: {bundle:?}"
+        );
+    }
+
+    #[test]
+    fn weighting_the_dense_retriever_flips_a_lexical_recency_decoy() {
+        // The exact shape that defeats balanced fusion: memory 1 is the semantic (dense) match;
+        // memory 2 merely shares a keyword AND is the most recent, so under equal weights its
+        // two votes beat memory 1's one.
+        let dense = vec![1u64];
+        let keyword = vec![2u64];
+        let recency = vec![2u64];
+
+        let equal = rrf_fuse_weighted(&[(1.0, &dense), (1.0, &keyword), (1.0, &recency)]);
+        assert_eq!(equal[0].id, 2, "balanced fusion: the lexical + recent decoy wins");
+
+        // Weight the dense retriever up (RetrievalWeights::semantic) and the single semantic
+        // vote outweighs the decoy's two — the meaning-match now wins.
+        let w = RetrievalWeights::semantic();
+        let weighted =
+            rrf_fuse_weighted(&[(w.dense, &dense), (w.keyword, &keyword), (w.recency, &recency)]);
+        assert_eq!(weighted[0].id, 1, "dense-weighted fusion: the semantic match wins");
+    }
+
+    #[test]
+    fn default_weights_leave_recall_unchanged() {
+        // recall_weighted with Default weights must fuse identically to plain rrf_fuse — the
+        // weighting is purely additive on top of today's behavior.
+        let a = rrf_fuse(&[vec![1, 2], vec![2, 3]]);
+        let w = RetrievalWeights::default();
+        let b = rrf_fuse_weighted(&[(w.dense, &[1, 2]), (w.recency, &[2, 3]), (w.keyword, &[])]);
+        assert_eq!(
+            a.iter().map(|f| f.id).collect::<Vec<_>>(),
+            b.iter().map(|f| f.id).collect::<Vec<_>>()
         );
     }
 }

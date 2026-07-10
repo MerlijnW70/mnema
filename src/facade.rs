@@ -12,7 +12,7 @@
 //! Gated behind the `secure` feature (ADR-0020) because it builds on the encrypted
 //! episodic store. The retrieval and semantic primitives remain available without it.
 
-use crate::retrieval::{Decay, fuse_and_pack, hybrid_recall};
+use crate::retrieval::{Decay, RetrievalWeights, fuse_and_pack, hybrid_recall};
 use crate::semantic::{Fact, FactStatus, Resolution, SemanticStore};
 use crate::store::{
     EpisodicLog, PurgeReceipt, StoreError, open_bytes, put_bytes, seal_bytes, string_from,
@@ -173,6 +173,32 @@ impl<E: Embedder> Engram<E> {
             per_retriever,
             char_budget,
             None,
+            RetrievalWeights::default(),
+        )
+    }
+
+    /// Like [`recall`](Engram::recall), but with explicit per-retriever fusion `weights` — e.g.
+    /// [`RetrievalWeights::semantic`] to let a real embedding model's meaning-match outvote a
+    /// memory that merely shares a keyword or is more recent. With the default lexical embedder
+    /// the dense signal is weak, so weighting it up there hurts more than it helps.
+    pub fn recall_weighted(
+        &self,
+        query: &str,
+        dest: Destination,
+        per_retriever: usize,
+        char_budget: usize,
+        weights: RetrievalWeights,
+    ) -> Vec<BundleItem> {
+        hybrid_recall(
+            query,
+            self.episodic.events(),
+            &self.index,
+            &self.embedder,
+            dest,
+            per_retriever,
+            char_budget,
+            None,
+            weights,
         )
     }
 
@@ -202,6 +228,7 @@ impl<E: Embedder> Engram<E> {
                 now: self.clock,
                 half_life,
             }),
+            RetrievalWeights::default(),
         )
     }
 
@@ -264,6 +291,7 @@ impl<E: Embedder> Engram<E> {
             per_retriever,
             char_budget,
             None,
+            RetrievalWeights::default(),
         )
     }
 
