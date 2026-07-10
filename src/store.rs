@@ -336,6 +336,94 @@ pub(crate) fn open_bytes(bytes: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, Sto
         .map_err(|_| StoreError::Decrypt)
 }
 
+/// A derived sealing key plus the salt it came from. **Deriving** it is the expensive,
+/// memory-hard Argon2id step; **sealing** or **opening** under an already-derived key is just a
+/// fresh-nonce AEAD operation. A store that re-seals on every write (e.g. the MCP server, which
+/// persists after each `remember`) derives this **once** — on open, or on the first seal — and
+/// reuses it, instead of paying a full Argon2id derivation per write.
+///
+/// Security is unchanged from [`seal_bytes`]: every `seal` draws a **fresh** 24-byte XChaCha
+/// nonce, so reusing the key + salt across seals of one store is safe (a nonce is what must be
+/// unique, never the salt). The blob format is identical (`salt || nonce || ciphertext`), so a
+/// store sealed this way opens with plain [`open_bytes`] and vice versa.
+pub(crate) struct SealingKey {
+    /// The passphrase this key was derived from — kept so a caller that seals with a *different*
+    /// passphrase (e.g. `engram rekey`) re-derives instead of silently reusing the old key.
+    passphrase: Vec<u8>,
+    salt: [u8; SALT_LEN],
+    key: [u8; 32],
+}
+
+impl SealingKey {
+    /// Derive a key from `passphrase` with a fresh random salt — one Argon2id pass.
+    pub(crate) fn derive(passphrase: &[u8]) -> Result<Self, StoreError> {
+        let mut salt = [0u8; SALT_LEN];
+        getrandom::getrandom(&mut salt).map_err(|_| StoreError::Entropy)?;
+        let key = derive_key(passphrase, &salt)?;
+        Ok(Self {
+            passphrase: passphrase.to_vec(),
+            salt,
+            key,
+        })
+    }
+
+    /// Re-derive the key for an existing blob's `salt` — the open path (one Argon2id pass).
+    pub(crate) fn for_salt(passphrase: &[u8], salt: [u8; SALT_LEN]) -> Result<Self, StoreError> {
+        let key = derive_key(passphrase, &salt)?;
+        Ok(Self {
+            passphrase: passphrase.to_vec(),
+            salt,
+            key,
+        })
+    }
+
+    /// Whether this cached key was derived from `passphrase` (so it may be reused). Not a
+    /// secret-vs-attacker comparison — it's the caller's own passphrase against itself — so a
+    /// plain `==` is fine.
+    pub(crate) fn matches(&self, passphrase: &[u8]) -> bool {
+        self.passphrase == passphrase
+    }
+
+    /// The salt prefixing a sealed blob, so the key can be reconstructed to open it.
+    pub(crate) fn salt_of(blob: &[u8]) -> Result<[u8; SALT_LEN], StoreError> {
+        let (salt, _) = take_slice(blob, 0, SALT_LEN)?;
+        Ok(salt.try_into().unwrap())
+    }
+
+    /// Seal `plaintext` under this key with a **fresh** nonce — no KDF. `salt || nonce || ct`.
+    pub(crate) fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        getrandom::getrandom(&mut nonce_bytes).map_err(|_| StoreError::Entropy)?;
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(&self.key).map_err(|_| StoreError::KeyDerivation)?;
+        let nonce = XNonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|_| StoreError::Decrypt)?;
+        let mut out = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
+        out.extend_from_slice(&self.salt);
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        Ok(out)
+    }
+
+    /// Decrypt a blob produced by [`seal`](SealingKey::seal) (or [`seal_bytes`]) under this key —
+    /// no KDF, since the key is already in hand. A wrong key or tampering fails the AEAD tag.
+    pub(crate) fn open(&self, blob: &[u8]) -> Result<Vec<u8>, StoreError> {
+        if blob.len() < SALT_LEN + NONCE_LEN {
+            return Err(StoreError::Truncated);
+        }
+        let (_salt, rest) = blob.split_at(SALT_LEN);
+        let (nonce_bytes, ciphertext) = rest.split_at(NONCE_LEN);
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(&self.key).map_err(|_| StoreError::KeyDerivation)?;
+        let nonce = XNonce::from_slice(nonce_bytes);
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| StoreError::Decrypt)
+    }
+}
+
 /// Borrow `n` bytes at `off`, returning them and the next offset — or
 /// [`StoreError::Truncated`] if the buffer is too short. The single bounds check
 /// every reader funnels through; `checked_add` makes even an absurd length safe.
