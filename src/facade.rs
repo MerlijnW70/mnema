@@ -88,15 +88,48 @@ impl<E: Embedder> Engram<E> {
         id
     }
 
-    /// Assert a semantic fact, resolving contradictions ([`SemanticStore::assert`]).
+    /// Assert a semantic fact at tier [`EgressTier::Open`], resolving contradictions.
     pub fn remember_fact(&mut self, subject: &str, attribute: &str, value: &str) -> Resolution {
-        let at = self.tick();
-        self.semantic.assert(subject, attribute, value, at)
+        self.remember_fact_tiered(subject, attribute, value, EgressTier::Open)
     }
 
-    /// The current belief for a `(subject, attribute)` key, if any.
+    /// Assert a semantic fact with an explicit egress `tier` — a `Private` belief is stored
+    /// but never returned to a `Remote` destination (see [`belief_for`](Engram::belief_for)).
+    pub fn remember_fact_tiered(
+        &mut self,
+        subject: &str,
+        attribute: &str,
+        value: &str,
+        tier: EgressTier,
+    ) -> Resolution {
+        let at = self.tick();
+        self.semantic.assert_tiered(subject, attribute, value, at, tier)
+    }
+
+    /// The current belief for a `(subject, attribute)` key, if any — the **unfiltered**
+    /// read. This can return a `Private` belief; never hand its `value` to a remote model.
+    /// Use [`belief_for`](Engram::belief_for) when assembling a prompt for a destination.
     pub fn belief(&self, subject: &str, attribute: &str) -> Option<&Fact> {
         self.semantic.current(subject, attribute)
+    }
+
+    /// The current belief for a key **as visible to `dest`**: a belief the egress filter
+    /// would deny (a `Private`, or a `Redacted` bound `Remote`) is withheld — this returns
+    /// `None`, exactly as if it did not exist, so a `Remote` model can never read it out.
+    pub fn belief_for(
+        &self,
+        subject: &str,
+        attribute: &str,
+        dest: Destination,
+    ) -> Option<&Fact> {
+        self.semantic.current_for(subject, attribute, dest)
+    }
+
+    /// Hard-delete every semantic fact matching `predicate` (live or superseded), returning
+    /// how many were removed — the right-to-be-forgotten path for beliefs, alongside
+    /// [`forget`](Engram::forget) for episodic memories.
+    pub fn forget_facts(&mut self, predicate: impl FnMut(&Fact) -> bool) -> usize {
+        self.semantic.forget(predicate)
     }
 
     /// Hybrid recall over the episodic memories, egress-filtered for `dest` and bounded
@@ -123,7 +156,9 @@ impl<E: Embedder> Engram<E> {
     /// Like [`recall`](Engram::recall), but applies the forgetting curve (proposal §3.2):
     /// each hit's score is scaled by its `importance` and a recency weight that halves
     /// every `half_life` ticks, using the facade's own clock as *now*. Recent, important
-    /// memories are preferred over stale ones; a `half_life` of `0` behaves like `recall`.
+    /// memories are preferred over stale ones. Note a `half_life` of `0` disables the
+    /// *recency decay* (the weight is `1.0`) but **still applies `importance` weighting**,
+    /// so it is not identical to [`recall`](Engram::recall), which applies no scaling at all.
     pub fn recall_decayed(
         &self,
         query: &str,
@@ -208,12 +243,31 @@ impl<E: Embedder> Engram<E> {
         )
     }
 
-    /// The `k` most-recent memories by logical time, newest first.
+    /// The `k` most-recent memories by logical time, newest first — the **raw, unfiltered**
+    /// view, including `Private` content.
+    ///
+    /// # Warning
+    /// This does **not** apply the egress filter. Never assemble a prompt for a `Remote`
+    /// model from its results — that would leak `Private` memories, defeating the ADR-0021
+    /// invariant. Use it only for local inspection/debugging, or use
+    /// [`recall_recent`](Engram::recall_recent) to get an egress-safe, budget-bounded bundle.
     pub fn recall_by_recency(&self, k: usize) -> Vec<&Memory> {
         let mut ordered: Vec<&Memory> = self.episodic.events().iter().collect();
         ordered.sort_by_key(|b| std::cmp::Reverse(b.at));
         ordered.truncate(k);
         ordered
+    }
+
+    /// The most-recent memories as an **egress-safe** bundle for `dest`, newest first,
+    /// bounded to `char_budget` characters. Unlike [`recall_by_recency`](Engram::recall_by_recency)
+    /// this routes through the same choke point as [`recall`](Engram::recall), so a `Private`
+    /// memory's content never reaches a `Remote` bundle.
+    pub fn recall_recent(
+        &self,
+        dest: Destination,
+        char_budget: usize,
+    ) -> Vec<BundleItem> {
+        crate::assemble_bundle(self.episodic.events(), dest, char_budget)
     }
 
     /// Hard-delete matching memories from both the log and the vector index, returning
@@ -316,8 +370,25 @@ fn status_from_tag(tag: u8) -> Result<FactStatus, StoreError> {
     }
 }
 
-/// Serialize semantic facts: per fact `id(8) | at(8) | confidence(4) | status(1)` then
-/// the length-prefixed subject, attribute, and value.
+fn tier_tag(tier: EgressTier) -> u8 {
+    match tier {
+        EgressTier::Open => 0,
+        EgressTier::Redacted => 1,
+        EgressTier::Private => 2,
+    }
+}
+
+fn tier_from_tag(tag: u8) -> Result<EgressTier, StoreError> {
+    match tag {
+        0 => Ok(EgressTier::Open),
+        1 => Ok(EgressTier::Redacted),
+        2 => Ok(EgressTier::Private),
+        _ => Err(StoreError::UnknownTag),
+    }
+}
+
+/// Serialize semantic facts: per fact `id(8) | at(8) | confidence(4) | status(1) | tier(1)`
+/// then the length-prefixed subject, attribute, and value.
 fn encode_facts(facts: &[Fact]) -> Vec<u8> {
     let mut buf = Vec::new();
     for f in facts {
@@ -325,6 +396,7 @@ fn encode_facts(facts: &[Fact]) -> Vec<u8> {
         buf.extend_from_slice(&f.at.to_le_bytes());
         buf.extend_from_slice(&f.confidence.to_le_bytes());
         buf.push(status_tag(f.status));
+        buf.push(tier_tag(f.tier));
         put_bytes(&mut buf, f.subject.as_bytes());
         put_bytes(&mut buf, f.attribute.as_bytes());
         put_bytes(&mut buf, f.value.as_bytes());
@@ -342,6 +414,7 @@ fn decode_facts(buf: &[u8]) -> Result<Vec<Fact>, StoreError> {
         let (at, o) = take_u64(buf, o)?;
         let (confidence, o) = take_u32(buf, o)?;
         let (status_byte, o) = take_u8(buf, o)?;
+        let (tier_byte, o) = take_u8(buf, o)?;
         let (subject, o) = take_bytes(buf, o)?;
         let (attribute, o) = take_bytes(buf, o)?;
         let (value, next) = take_bytes(buf, o)?;
@@ -354,6 +427,7 @@ fn decode_facts(buf: &[u8]) -> Result<Vec<Fact>, StoreError> {
             at,
             confidence,
             status: status_from_tag(status_byte)?,
+            tier: tier_from_tag(tier_byte)?,
         });
     }
     Ok(facts)
@@ -566,5 +640,57 @@ mod tests {
             Engram::open(&[0u8; 8], b"key", VowelEmbedder).err(),
             Some(StoreError::Truncated)
         );
+    }
+
+    #[test]
+    fn a_private_belief_is_withheld_from_a_remote_read() {
+        let mut e = Engram::new(VowelEmbedder);
+        e.remember_fact_tiered("user", "api_key", "sk-live-123", EgressTier::Private);
+        // The unfiltered read sees it; the Remote-facing read must not; Local may.
+        assert_eq!(e.belief("user", "api_key").map(|f| f.value.as_str()), Some("sk-live-123"));
+        assert!(e.belief_for("user", "api_key", Destination::Remote).is_none());
+        assert_eq!(
+            e.belief_for("user", "api_key", Destination::Local).map(|f| f.value.as_str()),
+            Some("sk-live-123")
+        );
+    }
+
+    #[test]
+    fn forget_facts_hard_deletes_matching_beliefs() {
+        let mut e = Engram::new(VowelEmbedder);
+        e.remember_fact("server", "token", "abc123");
+        e.remember_fact("user", "city", "utrecht");
+        let purged = e.forget_facts(|f| f.value.contains("abc"));
+        assert_eq!(purged, 1);
+        assert!(e.belief("server", "token").is_none());
+        assert!(e.belief("user", "city").is_some());
+    }
+
+    #[test]
+    fn recall_recent_is_egress_safe_unlike_recall_by_recency() {
+        let mut e = Engram::new(VowelEmbedder);
+        e.remember(EgressTier::Private, "the secret plan"); // id 0
+        e.remember(EgressTier::Open, "a public note"); // id 1
+        // The raw view leaks the private content...
+        assert!(e.recall_by_recency(2).iter().any(|m| m.content == "the secret plan"));
+        // ...but the egress-safe recent bundle drops it for a Remote destination.
+        let bundle = e.recall_recent(Destination::Remote, 1_000);
+        assert!(bundle.iter().all(|b| !b.text.contains("secret")));
+        assert!(bundle.iter().any(|b| b.text == "a public note"));
+    }
+
+    #[test]
+    fn seal_then_open_preserves_a_private_belief_tier() {
+        let mut e = Engram::new(VowelEmbedder);
+        e.remember_fact_tiered("user", "api_key", "sk-live-xyz", EgressTier::Private);
+        let sealed = e.seal(b"key").unwrap();
+        let reopened = Engram::open(&sealed, b"key", VowelEmbedder).unwrap();
+        // The tier byte round-trips: the restored belief is still Private, still withheld
+        // from a Remote read (a dropped/mis-decoded tier would leak it).
+        assert_eq!(
+            reopened.belief("user", "api_key").map(|f| f.tier),
+            Some(EgressTier::Private)
+        );
+        assert!(reopened.belief_for("user", "api_key", Destination::Remote).is_none());
     }
 }
