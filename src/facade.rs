@@ -211,7 +211,7 @@ impl<E: Embedder> Engram<E> {
     /// The `k` most-recent memories by logical time, newest first.
     pub fn recall_by_recency(&self, k: usize) -> Vec<&Memory> {
         let mut ordered: Vec<&Memory> = self.episodic.events().iter().collect();
-        ordered.sort_by(|a, b| b.at.cmp(&a.at));
+        ordered.sort_by_key(|b| std::cmp::Reverse(b.at));
         ordered.truncate(k);
         ordered
     }
