@@ -13,6 +13,7 @@
 //! Pure safe Rust, zero dependencies (ADR-0007 holds).
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use crate::vector::{Embedder, VectorIndex};
 use crate::{BundleItem, Destination, Memory, MemoryId};
@@ -41,6 +42,15 @@ pub fn decay_weight(age: u64, half_life: u64) -> f32 {
     }
     let elapsed_half_lives = age as f32 / half_life as f32;
     0.5_f32.powf(elapsed_half_lives)
+}
+
+/// The forgetting-curve score of a hit: its fused `base` score scaled *multiplicatively*
+/// by the memory's `importance` and its recency weight. Both factors multiply — a salient
+/// memory (`importance > 1`) and a fresh one (`weight → 1`) reinforce; a stale, dull one
+/// sinks. Factored out (and asserted on exact values) so the *product* contract is pinned,
+/// not merely the resulting order — an additive combination would rank differently.
+pub fn decayed_score(base: f32, importance: f32, age: u64, half_life: u64) -> f32 {
+    base * importance * decay_weight(age, half_life)
 }
 
 /// A fused hit: a memory id and its summed reciprocal-rank score.
@@ -76,7 +86,13 @@ pub fn rrf_fuse(rankings: &[Vec<MemoryId>]) -> Vec<Fused> {
 /// (a cheap lexical signal). Only memories with at least one shared term are returned;
 /// ties keep input order (the sort is stable).
 pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
-    let terms = tokenize(query);
+    // De-duplicate the query terms: the score is the count of *distinct* query terms a
+    // memory contains, so `"dog dog cat"` must not score a "dog" memory twice and outrank
+    // an equally-relevant "cat" memory (the terms are iterated and counted, unlike the
+    // content tokens which are only membership-tested).
+    let mut terms = tokenize(query);
+    terms.sort();
+    terms.dedup();
     let mut scored: Vec<(MemoryId, usize)> = memories
         .iter()
         .filter_map(|m| {
@@ -93,9 +109,10 @@ pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
     scored.into_iter().map(|(id, _)| id).collect()
 }
 
-/// Lowercase, split on non-alphanumeric, drop empties. Distinct-preserving is not
-/// needed — `keyword_rank` counts distinct query terms, and duplicates in a term list
-/// only re-confirm a match.
+/// Lowercase, split on non-alphanumeric, drop empties. Callers that *count* the tokens
+/// (the query side of `keyword_rank`) must de-duplicate first, since a repeated token
+/// would otherwise be counted more than once; callers that only membership-test them
+/// (the content side) need not.
 fn tokenize(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -170,13 +187,17 @@ pub fn fuse_and_pack(
 
     let mut fused = rrf_fuse(&[vector_rank.to_vec(), recency_rank, keyword]);
 
+    // One id→memory map for the (up to two) resolution passes below, so each is an O(1)
+    // lookup instead of an O(fused·N) linear scan over the whole corpus per query.
+    let by_id: HashMap<MemoryId, &Memory> = memories.iter().map(|m| (m.id, m)).collect();
+
     // Optional forgetting curve: scale each fused score by the memory's importance and
     // its recency weight, then re-sort. Recent, important memories rise; stale ones sink.
     if let Some(d) = decay {
         for hit in &mut fused {
-            if let Some(m) = memories.iter().find(|m| m.id == hit.id) {
+            if let Some(m) = by_id.get(&hit.id) {
                 let age = d.now.saturating_sub(m.at);
-                hit.score *= m.importance * decay_weight(age, d.half_life);
+                hit.score = decayed_score(hit.score, m.importance, age, d.half_life);
             }
         }
         fused.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
@@ -186,7 +207,7 @@ pub fn fuse_and_pack(
     // (e.g. a since-forgotten one) simply drop out.
     let ordered: Vec<&Memory> = fused
         .iter()
-        .filter_map(|f| memories.iter().find(|m| m.id == f.id))
+        .filter_map(|f| by_id.get(&f.id).copied())
         .collect();
 
     super::pack_bundle(&ordered, dest, char_budget)
@@ -276,6 +297,20 @@ mod tests {
     fn keyword_rank_is_case_insensitive_and_tokenized() {
         let mems = vec![mem(1, EgressTier::Open, 1, "The CAT, sat!")];
         assert_eq!(keyword_rank("cat", &mems), vec![1]);
+    }
+
+    #[test]
+    fn keyword_rank_counts_distinct_terms_not_repetitions() {
+        // The query `"dog dog cat"` shares the DISTINCT terms {dog, cat}. A "cat"-only and
+        // a "dog"-only memory therefore tie at overlap 1. If the duplicate "dog" were
+        // double-counted, the dog memory would score 2 and jump ahead — so ordering the
+        // cat memory first in input and asserting it stays first pins the dedup:
+        //   correct → tie, input order [1, 2];  double-counting → [2, 1].
+        let mems = vec![
+            mem(1, EgressTier::Open, 2, "cat and mouse"), // distinct overlap {cat} → 1
+            mem(2, EgressTier::Open, 1, "the dog"),       // distinct overlap {dog} → 1 (was 2)
+        ];
+        assert_eq!(keyword_rank("dog dog cat", &mems), vec![1, 2]);
     }
 
     #[test]
@@ -419,5 +454,40 @@ mod tests {
         );
         // 10× importance overwhelms memory 1's slight stable-tie edge.
         assert_eq!(bundle[0].id, 2);
+    }
+
+    #[test]
+    fn decayed_score_is_the_product_of_base_importance_and_weight() {
+        // The forgetting curve is MULTIPLICATIVE. At age 0 the weight is 1.0, so the score
+        // is base × importance = 6.0; an additive combination would give 2 + 3 = 5.0.
+        assert!(approx(decayed_score(2.0, 3.0, 0, 10), 6.0));
+        // At one half-life the weight halves: 4 × 1 × 0.5 = 2.0.
+        assert!(approx(decayed_score(4.0, 1.0, 10, 10), 2.0));
+        // Importance multiplies too: 1 × 3 × 0.5 = 1.5.
+        assert!(approx(decayed_score(1.0, 3.0, 10, 10), 1.5));
+    }
+
+    #[test]
+    fn the_dense_retriever_actually_feeds_the_fusion() {
+        // mem 1 matches the query ONLY by embedding: "iou" and the query "aei" share no
+        // token (so keyword = 0) and mem 1 is older than mem 2 (so recency, capped at 1,
+        // surfaces mem 2, not mem 1). Both embed to [3, 0], so cosine picks mem 1. If it
+        // reaches the bundle, the dense retriever fed the fusion — dropping vector_rank
+        // would make it vanish.
+        let mems = vec![
+            mem(1, EgressTier::Open, 1, "iou"),
+            mem(2, EgressTier::Open, 2, "bcd"),
+        ];
+        let embedder = VowelEmbedder;
+        let mut idx = VectorIndex::new(2);
+        idx.insert(1, embedder.embed("iou")).unwrap();
+        idx.insert(2, embedder.embed("bcd")).unwrap();
+        let bundle = hybrid_recall(
+            "aei", &mems, &idx, &embedder, Destination::Local, 1, 1_000, None,
+        );
+        assert!(
+            bundle.iter().any(|b| b.id == 1),
+            "the embedding-only match must be recalled via the dense retriever: {bundle:?}"
+        );
     }
 }
