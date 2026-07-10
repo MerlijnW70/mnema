@@ -134,8 +134,10 @@ impl EpisodicLog {
         self.append_important(kind, tier, at, 1.0, content)
     }
 
-    /// Append an event with an explicit `importance` (see [`Memory::importance`]);
-    /// returns its freshly assigned, monotonic id.
+    /// Append an event with an explicit `importance` (see [`Memory::importance`]) and an
+    /// empty redacted surface; returns its freshly assigned, monotonic id. Use
+    /// [`append_redacted`](EpisodicLog::append_redacted) to attach a surface that may go
+    /// remote for a `Redacted`-tier memory.
     pub fn append_important(
         &mut self,
         kind: MemoryKind,
@@ -143,6 +145,22 @@ impl EpisodicLog {
         at: u64,
         importance: f32,
         content: impl Into<String>,
+    ) -> MemoryId {
+        self.append_redacted(kind, tier, at, importance, content, String::new())
+    }
+
+    /// Append an event carrying an explicit `redacted` surface — the text emitted in place
+    /// of `content` when a `Redacted`-tier memory is bound for a `Remote` destination (the
+    /// egress filter's `Redact` decision). For non-`Redacted` tiers the surface is unused
+    /// but harmless. Returns the freshly assigned, monotonic id.
+    pub fn append_redacted(
+        &mut self,
+        kind: MemoryKind,
+        tier: EgressTier,
+        at: u64,
+        importance: f32,
+        content: impl Into<String>,
+        redacted: impl Into<String>,
     ) -> MemoryId {
         let id = self.next_id;
         self.next_id += 1;
@@ -153,7 +171,7 @@ impl EpisodicLog {
             at,
             importance,
             content: content.into(),
-            redacted: String::new(),
+            redacted: redacted.into(),
         });
         id
     }

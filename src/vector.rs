@@ -89,8 +89,8 @@ impl VectorIndex {
     }
 
     /// The exact top-`k` hits for `query`, highest cosine similarity first. A query of
-    /// the wrong dimensionality, or `k == 0`, yields no hits. Ties keep insertion order
-    /// (the sort is stable).
+    /// the wrong dimensionality, or `k == 0`, yields no hits. Ties are broken by ascending
+    /// id (a total order, so the approximate [`IvfIndex`] can match this exactly).
     pub fn search(&self, query: &[f32], k: usize) -> Vec<Scored> {
         if query.len() != self.dims {
             return Vec::new();
@@ -103,9 +103,16 @@ impl VectorIndex {
                 score: cosine(query, v),
             })
             .collect();
-        // Descending by score; a NaN (which cannot arise here — cosine guards it) would
-        // sort as Equal rather than poison the order.
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+        // Descending by score, ties broken by ascending id — a *total* order independent
+        // of iteration order, so the exact index and the IVF index (which collects
+        // candidates in bucket order, not insertion order) agree even on tied scores. A
+        // NaN (which cannot arise here — cosine guards it) sorts as Equal.
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(Ordering::Equal)
+                .then(a.id.cmp(&b.id))
+        });
         scored.truncate(k);
         scored
     }
@@ -120,8 +127,9 @@ impl VectorIndex {
 /// filter's FP-rate, Part 18/BND-statistical-quality), *not* a ratchet invariant. What
 /// the ratchet *does* pin is the deterministic contract: with `probe >= anchors`, IVF
 /// scans every bucket and returns **exactly** what the exact [`VectorIndex`] would —
-/// the approximate index degrades to its own oracle. A mutant that drops a candidate
-/// bucket or mis-assigns a vector breaks that equality.
+/// ties included, since both rank by the same total order (score descending, then id
+/// ascending) rather than a collection-order-dependent stable sort. A mutant that drops a
+/// candidate bucket, mis-assigns a vector, or changes the tiebreak breaks that equality.
 #[derive(Clone, Debug, Default)]
 pub struct IvfIndex {
     dims: usize,
@@ -200,7 +208,15 @@ impl IvfIndex {
                 });
             }
         }
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+        // Same total order as the exact index (score desc, then id asc), so with
+        // `probe >= anchors` this returns byte-for-byte what `VectorIndex::search` would —
+        // ties included.
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(Ordering::Equal)
+                .then(a.id.cmp(&b.id))
+        });
         scored.truncate(k);
         scored
     }
@@ -373,6 +389,29 @@ mod tests {
         let ivf_ids: Vec<MemoryId> = ivf.search(&query, 4, 2).iter().map(|h| h.id).collect();
         assert_eq!(ivf_ids, exact_ids);
         assert_eq!(exact_ids, vec![1, 2, 4, 3]);
+    }
+
+    #[test]
+    fn exact_search_breaks_score_ties_by_ascending_id() {
+        // Two identical vectors inserted in DESCENDING id order tie on cosine. The result
+        // must order them by id (5 before 6), not by insertion order (which would give 6, 5)
+        // — this is the total order that lets the IVF match the exact index on ties.
+        let mut idx = VectorIndex::new(2);
+        idx.insert(6, vec![1.0, 0.0]).unwrap();
+        idx.insert(5, vec![1.0, 0.0]).unwrap();
+        let ids: Vec<MemoryId> = idx.search(&[1.0, 0.0], 2).iter().map(|h| h.id).collect();
+        assert_eq!(ids, vec![5, 6]);
+    }
+
+    #[test]
+    fn ivf_search_breaks_score_ties_by_ascending_id_like_the_exact_index() {
+        // Same tie, in the IVF: both land in bucket 0, collected in insertion order (6, 5);
+        // the id tiebreak must reorder them to (5, 6) so IVF and exact never diverge on ties.
+        let mut ivf = IvfIndex::new(2, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        ivf.insert(6, vec![1.0, 0.0]).unwrap();
+        ivf.insert(5, vec![1.0, 0.0]).unwrap();
+        let ids: Vec<MemoryId> = ivf.search(&[1.0, 0.0], 2, 2).iter().map(|h| h.id).collect();
+        assert_eq!(ids, vec![5, 6]);
     }
 
     #[test]
