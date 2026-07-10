@@ -99,7 +99,7 @@ fn load(store: &str) -> Engram<HashEmbedder> {
     }
 }
 
-fn save(store: &str, mem: &Engram<HashEmbedder>) {
+fn save(store: &str, mem: &mut Engram<HashEmbedder>) {
     let blob = mem
         .seal(&resolve_key(Path::new(store)))
         .unwrap_or_else(|_| die("seal failed"));
@@ -123,7 +123,7 @@ fn rekey(store: &str) {
         die(&format!("rekey: {} already exists; refusing to overwrite", keyfile.display()));
     }
     let bytes = std::fs::read(store).unwrap_or_else(|e| die(&format!("read {store}: {e}")));
-    let mem = Engram::open(&bytes, &old, HashEmbedder::new(DIMS))
+    let mut mem = Engram::open(&bytes, &old, HashEmbedder::new(DIMS))
         .unwrap_or_else(|_| die("rekey: cannot open store with $ENGRAM_KEY (wrong passphrase?)"));
     let new_key = generate_keyfile(&keyfile);
     let blob = mem.seal(&new_key).unwrap_or_else(|_| die("rekey: seal failed"));
@@ -148,14 +148,14 @@ fn main() {
             let store = &args[1];
             let mut mem = load(store);
             let id = mem.remember(tier(&args[2]), &args[3]);
-            save(store, &mem);
+            save(store, &mut mem);
             println!("{id}");
         }
         ("fact", 5) => {
             let store = &args[1];
             let mut mem = load(store);
             let res = mem.remember_fact(&args[2], &args[3], &args[4]);
-            save(store, &mem);
+            save(store, &mut mem);
             println!("{res:?}");
         }
         ("recall", 4) => {
