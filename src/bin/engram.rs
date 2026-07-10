@@ -9,6 +9,7 @@
 //! The key is per-store, resolved in this order (never on the command line):
 //!   1. `$ENGRAM_KEY` if set — an explicit passphrase (shared stores, CI, env-only secrets);
 //!   2. else a random 32-byte key in the sidecar `<store>.key`, generated on first use.
+//!
 //! There is no shared default: each store gets its own independent key. To migrate a store
 //! that was sealed under an old passphrase, `engram rekey <store>` (with `$ENGRAM_KEY` set
 //! to the old passphrase) re-seals it under a fresh keyfile.
@@ -70,11 +71,10 @@ fn generate_keyfile(path: &Path) -> Vec<u8> {
 /// only for a store that does not yet exist — never for an existing store missing its key
 /// (that is a migration, handled by `rekey`), so we can't silently lock the data away.
 fn resolve_key(store: &Path) -> Vec<u8> {
-    if let Ok(k) = std::env::var("ENGRAM_KEY") {
-        if !k.is_empty() {
+    if let Ok(k) = std::env::var("ENGRAM_KEY")
+        && !k.is_empty() {
             return k.into_bytes();
         }
-    }
     let keyfile = keyfile_path(store);
     match std::fs::read(&keyfile) {
         Ok(b) if b.len() == 32 => b,
