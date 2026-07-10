@@ -17,6 +17,13 @@
 //! — is: **at most one *live* fact per `(subject, attribute)`, ever.** A mutant that
 //! leaves two live, or lets a stale fact win, must break a test below. Pure safe Rust,
 //! zero dependencies (ADR-0007 holds; no `secure` feature needed).
+//!
+//! Facts carry an [`EgressTier`] just like episodic memories, so the privacy wall covers
+//! beliefs too: a `Private` belief is stored but withheld from a remote destination (see
+//! [`SemanticStore::current_for`]). Reasserting a belief combines tiers *fail-closed* — the
+//! more restrictive one wins — so privacy never silently relaxes.
+
+use crate::{Destination, EgressDecision, EgressTier, egress_decision};
 
 /// Stable handle for a stored fact.
 pub type FactId = u64;
@@ -43,6 +50,9 @@ pub struct Fact {
     /// How many times this exact belief has been asserted (starts at 1).
     pub confidence: u32,
     pub status: FactStatus,
+    /// The belief's egress class — a `Private` fact is stored but never returned to a
+    /// `Remote` destination (see [`SemanticStore::current_for`]).
+    pub tier: EgressTier,
 }
 
 /// What an [`SemanticStore::assert`] did — precise enough for a caller (or a test) to
@@ -83,8 +93,8 @@ impl SemanticStore {
         Self { facts }
     }
 
-    /// Assert `subject.attribute = value` as observed at logical time `at`, resolving
-    /// against any existing live belief for the key. See the module docs for the rule.
+    /// Assert `subject.attribute = value` at logical time `at`, tier [`EgressTier::Open`].
+    /// See [`assert_tiered`](SemanticStore::assert_tiered) to classify a belief's privacy.
     pub fn assert(
         &mut self,
         subject: impl Into<String>,
@@ -92,30 +102,47 @@ impl SemanticStore {
         value: impl Into<String>,
         at: u64,
     ) -> Resolution {
+        self.assert_tiered(subject, attribute, value, at, EgressTier::Open)
+    }
+
+    /// Assert `subject.attribute = value` as observed at logical time `at`, with egress
+    /// `tier`, resolving against any existing live belief for the key. See the module docs
+    /// for the resolution rule. On reinforcement the tier combines *fail-closed*: the more
+    /// restrictive of the old and new tiers wins, so a belief's privacy never relaxes by
+    /// re-stating it more openly.
+    pub fn assert_tiered(
+        &mut self,
+        subject: impl Into<String>,
+        attribute: impl Into<String>,
+        value: impl Into<String>,
+        at: u64,
+        tier: EgressTier,
+    ) -> Resolution {
         let subject = subject.into();
         let attribute = attribute.into();
         let value = value.into();
 
         match self.live_index(&subject, &attribute) {
             None => {
-                self.push(subject, attribute, value, at, FactStatus::Live);
+                self.push(subject, attribute, value, at, FactStatus::Live, tier);
                 Resolution::Inserted
             }
             Some(i) if self.facts[i].value == value => {
                 // Agreement: strengthen the existing belief, do not duplicate it.
                 self.facts[i].confidence = self.facts[i].confidence.saturating_add(1);
                 self.facts[i].at = self.facts[i].at.max(at);
+                self.facts[i].tier = self.facts[i].tier.most_restrictive(tier);
                 Resolution::Reinforced
             }
             Some(i) if at >= self.facts[i].at => {
                 // Contradiction, at least as recent: the new belief wins.
                 self.facts[i].status = FactStatus::Superseded;
-                self.push(subject, attribute, value, at, FactStatus::Live);
+                self.push(subject, attribute, value, at, FactStatus::Live, tier);
                 Resolution::Superseded
             }
             Some(_) => {
                 // Contradiction, but older than the live belief: history only.
-                self.push(subject, attribute, value, at, FactStatus::Superseded);
+                self.push(subject, attribute, value, at, FactStatus::Superseded, tier);
                 Resolution::StaleIgnored
             }
         }
@@ -124,6 +151,24 @@ impl SemanticStore {
     /// The current live belief for a key, if any.
     pub fn current(&self, subject: &str, attribute: &str) -> Option<&Fact> {
         self.live_index(subject, attribute).map(|i| &self.facts[i])
+    }
+
+    /// The current live belief for a key **as visible to `dest`** — the egress-filtered
+    /// read. A belief whose tier the egress filter would deny (a `Private`, or a `Redacted`
+    /// bound `Remote` — facts have no redacted surface) is withheld: this returns `None`,
+    /// exactly as if the belief did not exist, so a `Remote` model can never read it out.
+    pub fn current_for(&self, subject: &str, attribute: &str, dest: Destination) -> Option<&Fact> {
+        self.current(subject, attribute)
+            .filter(|f| egress_decision(f.tier, dest) == EgressDecision::Allow)
+    }
+
+    /// Hard-delete every fact — live or superseded — matching `predicate`, returning how
+    /// many were removed. The right-to-be-forgotten path for beliefs, mirroring the
+    /// episodic log's `forget`; a belief thus deleted leaves no live record to supersede.
+    pub fn forget(&mut self, mut predicate: impl FnMut(&Fact) -> bool) -> usize {
+        let before = self.facts.len();
+        self.facts.retain(|f| !predicate(f));
+        before - self.facts.len()
     }
 
     /// Every fact ever recorded for a key — live and superseded — in insertion order.
@@ -158,6 +203,7 @@ impl SemanticStore {
         value: String,
         at: u64,
         status: FactStatus,
+        tier: EgressTier,
     ) -> FactId {
         let id = self.facts.len() as FactId;
         self.facts.push(Fact {
@@ -168,6 +214,7 @@ impl SemanticStore {
             at,
             confidence: 1,
             status,
+            tier,
         });
         id
     }
@@ -330,5 +377,74 @@ mod tests {
         let s = SemanticStore::new();
         assert!(s.current("nobody", "nothing").is_none());
         assert!(s.history("nobody", "nothing").is_empty());
+    }
+
+    #[test]
+    fn a_default_asserted_fact_is_open_tier() {
+        let mut s = SemanticStore::new();
+        s.assert("alice", "diet", "vegan", 1);
+        assert_eq!(s.current("alice", "diet").unwrap().tier, EgressTier::Open);
+    }
+
+    #[test]
+    fn a_private_fact_is_withheld_from_a_remote_read_but_visible_locally() {
+        let mut s = SemanticStore::new();
+        s.assert_tiered("user", "api_key", "sk-live", 1, EgressTier::Private);
+        // Unfiltered read sees it; a Remote read must not; a Local read may.
+        assert!(s.current("user", "api_key").is_some());
+        assert!(s.current_for("user", "api_key", Destination::Remote).is_none());
+        assert_eq!(
+            s.current_for("user", "api_key", Destination::Local).map(|f| f.value.as_str()),
+            Some("sk-live")
+        );
+    }
+
+    #[test]
+    fn a_redacted_fact_is_withheld_remotely_since_facts_have_no_redacted_surface() {
+        let mut s = SemanticStore::new();
+        s.assert_tiered("user", "note", "detail", 1, EgressTier::Redacted);
+        // Redacted → Remote is a Redact decision, but a fact has no redacted surface, so it
+        // is withheld (only an Allow passes current_for).
+        assert!(s.current_for("user", "note", Destination::Remote).is_none());
+        assert!(s.current_for("user", "note", Destination::Local).is_some());
+        // An Open fact is visible to both.
+        s.assert_tiered("user", "city", "utrecht", 1, EgressTier::Open);
+        assert!(s.current_for("user", "city", Destination::Remote).is_some());
+    }
+
+    #[test]
+    fn reasserting_a_belief_combines_tiers_fail_closed() {
+        let mut s = SemanticStore::new();
+        s.assert_tiered("user", "diet", "vegan", 1, EgressTier::Open);
+        // Reinforce the SAME value at a more restrictive tier → the tighter tier wins.
+        s.assert_tiered("user", "diet", "vegan", 2, EgressTier::Private);
+        assert_eq!(s.current("user", "diet").unwrap().tier, EgressTier::Private);
+        // Reasserting more openly must NOT relax it back.
+        s.assert_tiered("user", "diet", "vegan", 3, EgressTier::Open);
+        assert_eq!(s.current("user", "diet").unwrap().tier, EgressTier::Private);
+    }
+
+    #[test]
+    fn reinforcing_with_an_older_timestamp_does_not_rewind_recency() {
+        // Reinforcement takes `at.max(new)`, so re-observing a belief with an OLDER
+        // timestamp bumps confidence but must NOT rewind its recency (a `= at` mutant would).
+        let mut s = SemanticStore::new();
+        s.assert("a", "b", "v", 5);
+        assert_eq!(s.assert("a", "b", "v", 2), Resolution::Reinforced);
+        let cur = s.current("a", "b").unwrap();
+        assert_eq!(cur.at, 5, "recency must not rewind to the older sighting");
+        assert_eq!(cur.confidence, 2, "but the belief is still reinforced");
+    }
+
+    #[test]
+    fn forget_hard_deletes_matching_facts_live_and_superseded() {
+        let mut s = SemanticStore::new();
+        s.assert("alice", "diet", "vegetarian", 1);
+        s.assert("alice", "diet", "omnivore", 2); // supersedes → 2 records for the key
+        s.assert("bob", "city", "utrecht", 1);
+        let purged = s.forget(|f| f.subject == "alice");
+        assert_eq!(purged, 2, "both the live and superseded alice records go");
+        assert!(s.current("alice", "diet").is_none());
+        assert!(s.current("bob", "city").is_some()); // unrelated belief survives
     }
 }

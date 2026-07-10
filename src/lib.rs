@@ -62,6 +62,31 @@ pub enum EgressTier {
     Private,
 }
 
+impl EgressTier {
+    /// Restrictiveness rank, least to most: `Open < Redacted < Private`.
+    #[must_use]
+    pub fn rank(self) -> u8 {
+        match self {
+            EgressTier::Open => 0,
+            EgressTier::Redacted => 1,
+            EgressTier::Private => 2,
+        }
+    }
+
+    /// The more restrictive of two tiers — used to combine tiers *fail-closed* (e.g. when a
+    /// belief is reasserted at a different tier, the tighter one wins so privacy never
+    /// silently relaxes). A total match rather than a rank comparison, so `Private` on
+    /// either side always wins and there is no boundary operator to get subtly wrong.
+    #[must_use]
+    pub fn most_restrictive(self, other: EgressTier) -> EgressTier {
+        match (self, other) {
+            (EgressTier::Private, _) | (_, EgressTier::Private) => EgressTier::Private,
+            (EgressTier::Redacted, _) | (_, EgressTier::Redacted) => EgressTier::Redacted,
+            (EgressTier::Open, EgressTier::Open) => EgressTier::Open,
+        }
+    }
+}
+
 /// What the egress filter decided for one memory against one destination.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EgressDecision {
@@ -120,6 +145,7 @@ pub struct BundleItem {
 /// This is an enum match with no mutable operators, so the prober finds nothing to
 /// flip here directly (a total function with no mutation site) — the invariant earns its proof one
 /// layer up, in [`assemble_bundle`], where the deny branch meets real arithmetic.
+#[must_use]
 pub fn egress_decision(tier: EgressTier, dest: Destination) -> EgressDecision {
     match (tier, dest) {
         (EgressTier::Open, _) => EgressDecision::Allow,
@@ -138,6 +164,7 @@ pub fn egress_decision(tier: EgressTier, dest: Destination) -> EgressDecision {
 /// reaches a `Remote` bundle. Mutating the recency order, the budget accumulation,
 /// or the fit test must break a test below — that is what makes the contract
 /// *proven*, not merely asserted.
+#[must_use]
 pub fn assemble_bundle(
     memories: &[Memory],
     dest: Destination,
@@ -305,5 +332,38 @@ mod tests {
     fn a_zero_budget_admits_nothing() {
         let mems = vec![mem(1, EgressTier::Open, 1, "x")];
         assert!(assemble_bundle(&mems, Destination::Local, 0).is_empty());
+    }
+
+    #[test]
+    fn budget_keeps_scanning_past_an_over_budget_item() {
+        // Recency order: costs 2, 5, 2 with budget 4. The middle item overflows and must be
+        // SKIPPED while scanning continues, so the last (smaller) item still fits. A `break`
+        // instead of `continue` would stop at the overflow and drop the third item.
+        let mems = vec![
+            mem(3, EgressTier::Open, 1, "cc"),    // oldest, cost 2
+            mem(2, EgressTier::Open, 2, "bbbbb"), // middle, cost 5 — overflows
+            mem(1, EgressTier::Open, 3, "aa"),    // newest, cost 2
+        ];
+        let bundle = assemble_bundle(&mems, Destination::Local, 4);
+        let ids: Vec<MemoryId> = bundle.iter().map(|b| b.id).collect();
+        // Newest (1, cost 2) fits, middle (2, cost 5) is skipped, oldest (3, cost 2) still fits.
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn tier_rank_orders_open_below_redacted_below_private() {
+        assert!(EgressTier::Open.rank() < EgressTier::Redacted.rank());
+        assert!(EgressTier::Redacted.rank() < EgressTier::Private.rank());
+    }
+
+    #[test]
+    fn most_restrictive_keeps_the_tighter_tier_either_way() {
+        use EgressTier::*;
+        // The tighter tier wins regardless of argument order (fail-closed, commutative).
+        assert_eq!(Open.most_restrictive(Private), Private);
+        assert_eq!(Private.most_restrictive(Open), Private);
+        assert_eq!(Open.most_restrictive(Redacted), Redacted);
+        assert_eq!(Redacted.most_restrictive(Redacted), Redacted);
+        assert_eq!(Open.most_restrictive(Open), Open);
     }
 }
