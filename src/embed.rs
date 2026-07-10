@@ -67,9 +67,71 @@ impl Embedder for HashEmbedder {
     }
 }
 
+/// Mean-pool a sequence of per-token embedding vectors using an attention `mask`: average
+/// only the real tokens (`mask == 1`), skipping padding (`mask == 0`). This is the standard
+/// sentence-embedding reduction for models like all-MiniLM-L6-v2 — the model emits one vector
+/// per token; a sentence embedding is the mean of the non-padding ones. Exposed (with
+/// [`l2_normalize`]) so a transformer-backed [`Embedder`](crate::vector::Embedder) can reuse the
+/// pooling math this crate has tested rather than re-deriving it. A zero-length input yields an
+/// empty vector; an all-padding mask yields the zero vector (no division by zero).
+pub fn mean_pool(token_embeddings: &[Vec<f32>], mask: &[u32]) -> Vec<f32> {
+    let dims = token_embeddings.first().map_or(0, Vec::len);
+    let mut sum = vec![0.0f32; dims];
+    let mut count = 0u32;
+    for (tok, &m) in token_embeddings.iter().zip(mask) {
+        if m == 0 {
+            continue;
+        }
+        count += 1;
+        for (s, &x) in sum.iter_mut().zip(tok) {
+            *s += x;
+        }
+    }
+    if count > 0 {
+        for s in &mut sum {
+            *s /= count as f32;
+        }
+    }
+    sum
+}
+
+/// L2-normalize `v` so its Euclidean length is 1, making cosine similarity a plain dot
+/// product. A zero vector is returned unchanged (its direction is undefined — never divide by
+/// zero). Pairs with [`mean_pool`] for transformer sentence embeddings.
+pub fn l2_normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in &mut v {
+            *x /= norm;
+        }
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mean_pool_averages_only_the_unmasked_tokens() {
+        let tokens = vec![vec![1.0, 1.0], vec![3.0, 3.0], vec![9.0, 9.0]];
+        // mask drops the third token → mean of [1,1] and [3,3] = [2,2] (count is 2, not 3).
+        assert_eq!(mean_pool(&tokens, &[1, 1, 0]), vec![2.0, 2.0]);
+        // all-padding → the zero vector, never a divide-by-zero.
+        assert_eq!(mean_pool(&tokens, &[0, 0, 0]), vec![0.0, 0.0]);
+        // no tokens at all → empty.
+        assert!(mean_pool(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn l2_normalize_scales_to_unit_length_and_guards_zero() {
+        // [3,4] has norm 5 → [0.6, 0.8].
+        let n = l2_normalize(vec![3.0, 4.0]);
+        assert!((n[0] - 0.6).abs() < 1e-6 && (n[1] - 0.8).abs() < 1e-6, "{n:?}");
+        assert!((n.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-6, "unit length");
+        // a zero vector is returned unchanged.
+        assert_eq!(l2_normalize(vec![0.0, 0.0]), vec![0.0, 0.0]);
+    }
 
     #[test]
     fn every_token_adds_one_to_exactly_one_dimension() {
