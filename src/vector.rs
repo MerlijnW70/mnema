@@ -222,6 +222,64 @@ impl IvfIndex {
     }
 }
 
+/// Train up to `k` anchor centroids over `vectors` with **deterministic** k-means (spherical:
+/// assignment is by cosine, matching how [`IvfIndex`] buckets a vector to its nearest anchor),
+/// running `iters` Lloyd iterations. Trained anchors sit at the data's actual cluster centres, so
+/// an [`IvfIndex`] built on them buckets neighbours together and recovers far more of the exact
+/// top-k than anchors seeded from arbitrary points — the recall lever measured in the bench.
+///
+/// Determinism (no rng) is deliberate: the result is a pure function of the input, so the anchor
+/// set is reproducible and every branch here stays mutation-provable. Initialisation samples the
+/// corpus at even strides; an empty cluster keeps its centroid rather than dividing by zero.
+/// `k` is clamped to the corpus size; an empty corpus or `k == 0` yields no anchors.
+pub fn kmeans_anchors(vectors: &[Vec<f32>], k: usize, iters: usize) -> Vec<Vec<f32>> {
+    let k = k.min(vectors.len());
+    if k == 0 {
+        return Vec::new();
+    }
+    let dims = vectors[0].len();
+    // Even-stride initialisation: spread the initial centroids across the corpus deterministically.
+    let mut centroids: Vec<Vec<f32>> = (0..k)
+        .map(|i| vectors[i * vectors.len() / k].clone())
+        .collect();
+
+    for _ in 0..iters {
+        let mut sums = vec![vec![0.0f32; dims]; k];
+        let mut counts = vec![0usize; k];
+        for v in vectors {
+            let c = nearest_centroid(v, &centroids);
+            for d in 0..dims {
+                sums[c][d] += v[d];
+            }
+            counts[c] += 1;
+        }
+        for c in 0..k {
+            // An empty cluster keeps its previous centroid — dividing a zero sum by a zero count
+            // would be NaN and poison every future assignment to it.
+            if counts[c] > 0 {
+                for d in 0..dims {
+                    centroids[c][d] = sums[c][d] / counts[c] as f32;
+                }
+            }
+        }
+    }
+    centroids
+}
+
+/// The index of the centroid most similar (by cosine) to `v`; ties keep the earliest centroid.
+fn nearest_centroid(v: &[f32], centroids: &[Vec<f32>]) -> usize {
+    let mut best = 0;
+    let mut best_sim = f32::NEG_INFINITY;
+    for (i, c) in centroids.iter().enumerate() {
+        let sim = cosine(v, c);
+        if sim > best_sim {
+            best_sim = sim;
+            best = i;
+        }
+    }
+    best
+}
+
 /// Cosine similarity of two equal-length vectors, in `[-1, 1]`. Returns `0.0` when
 /// either vector has zero magnitude (the angle is undefined) rather than `NaN`.
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -447,5 +505,50 @@ mod tests {
         // score against a mismatched query rather than returning empty.
         let ivf = ivf_axis();
         assert!(ivf.search(&[1.0], 4, 2).is_empty());
+    }
+
+    #[test]
+    fn nearest_centroid_picks_the_cosine_argmax_and_keeps_the_earlier_on_a_tie() {
+        let centroids = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        assert_eq!(nearest_centroid(&[0.9, 0.1], &centroids), 0);
+        assert_eq!(nearest_centroid(&[0.1, 0.9], &centroids), 1);
+        // Equidistant → the earlier centroid wins (pins `>` vs `>=`).
+        assert_eq!(nearest_centroid(&[1.0, 1.0], &centroids), 0);
+    }
+
+    #[test]
+    fn kmeans_recovers_the_cluster_centres() {
+        // Two obvious clusters near the x- and y-axes. Even-stride init seeds centroids at
+        // index 0 ([1,0]) and 2 ([0,1]); the means converge to the per-cluster averages.
+        let data = vec![
+            vec![1.0, 0.0],
+            vec![0.9, 0.1],
+            vec![0.0, 1.0],
+            vec![0.1, 0.9],
+        ];
+        let cs = kmeans_anchors(&data, 2, 5);
+        assert_eq!(cs.len(), 2);
+        // Cluster 0 ≈ mean([1,0],[0.9,0.1]) = [0.95, 0.05]; cluster 1 ≈ [0.05, 0.95]. Exact
+        // values pin the mean division (a missing `/count` would leave the raw sums).
+        assert!((cs[0][0] - 0.95).abs() < 1e-4 && (cs[0][1] - 0.05).abs() < 1e-4, "{cs:?}");
+        assert!((cs[1][0] - 0.05).abs() < 1e-4 && (cs[1][1] - 0.95).abs() < 1e-4, "{cs:?}");
+    }
+
+    #[test]
+    fn kmeans_leaves_an_empty_clusters_centroid_unchanged_not_nan() {
+        // Identical vectors all fall in the first centroid; the second gets nothing. Its
+        // centroid must stay at its init value, not become NaN by dividing a zero sum by 0.
+        let data = vec![vec![1.0, 0.0], vec![1.0, 0.0]];
+        let cs = kmeans_anchors(&data, 2, 3);
+        assert_eq!(cs.len(), 2);
+        assert_eq!(cs[1], vec![1.0, 0.0], "empty cluster kept its centroid (no NaN)");
+    }
+
+    #[test]
+    fn kmeans_clamps_k_and_handles_degenerate_input() {
+        assert!(kmeans_anchors(&[], 3, 5).is_empty()); // empty corpus
+        assert!(kmeans_anchors(&[vec![1.0, 0.0]], 0, 5).is_empty()); // k == 0
+        // k larger than the corpus is clamped to the corpus size.
+        assert_eq!(kmeans_anchors(&[vec![1.0, 0.0], vec![0.0, 1.0]], 5, 3).len(), 2);
     }
 }
