@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-//! `engram` — Phase-1 seed of the local-first LLM memory layer
-//! (`docs/proposals/engram-memory-layer.md`). The smallest slice that is both
+//! `mnema` — Phase-1 seed of the local-first LLM memory layer
+//! (`docs/proposals/mnema-memory-layer.md`). The smallest slice that is both
 //! *real* and *noha-provable*: the **egress filter** — the load-bearing privacy
 //! invariant of ADR-0021 — plus the minimal memory model it guards and
 //! the recency assembly it feeds.
@@ -44,7 +44,7 @@ pub mod model_embed;
 /// rankings into one `recall`, routed through the egress filter (proposal §3.3).
 pub mod retrieval;
 
-/// The `Engram` facade (Phase 2c): one `remember`/`recall`/`forget` API over the whole
+/// The `Mnema` facade (Phase 2c): one `remember`/`recall`/`forget` API over the whole
 /// stack. Behind the `secure` feature — it builds on the encrypted episodic store.
 #[cfg(feature = "secure")]
 pub mod facade;
@@ -117,7 +117,7 @@ pub enum MemoryKind {
 /// Stable handle for a stored memory.
 pub type MemoryId = u64;
 
-/// One stored memory. Engram never reads the wall clock itself — `at` is a
+/// One stored memory. Mnema never reads the wall clock itself — `at` is a
 /// caller-supplied logical timestamp (higher = more recent), which also keeps this
 /// module deterministic and testable. (`Eq` is not derived: `importance` is an `f32`.)
 #[derive(Clone, Debug, PartialEq)]

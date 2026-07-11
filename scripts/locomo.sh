@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full LoCoMo retrieval benchmark for engram — robust to candle's native-memory buildup on long
+# Full LoCoMo retrieval benchmark for mnema — robust to candle's native-memory buildup on long
 # runs by evaluating ONE conversation per fresh subprocess (with retry), then aggregating.
 #
 # Needs the dataset:

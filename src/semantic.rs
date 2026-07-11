@@ -1,8 +1,8 @@
 //! Semantic store with **contradiction-resolving writes** — Phase-1 slice 3
-//! (`docs/proposals/engram-memory-layer.md` §3.2, differentiator #1). The place most
+//! (`docs/proposals/mnema-memory-layer.md` §3.2, differentiator #1). The place most
 //! memory layers are weak: they *append* every fact, so "user is vegetarian" and
 //! "user eats meat" both survive and retrieval returns whichever it happens to rank.
-//! Engram instead resolves the conflict on write.
+//! Mnema instead resolves the conflict on write.
 //!
 //! A fact is a `(subject, attribute) -> value` belief. Asserting a new fact for a key
 //! that already has a live belief does one of three things, deterministically:
@@ -395,9 +395,13 @@ mod tests {
         s.assert_tiered("user", "api_key", "sk-live", 1, EgressTier::Private);
         // Unfiltered read sees it; a Remote read must not; a Local read may.
         assert!(s.current("user", "api_key").is_some());
-        assert!(s.current_for("user", "api_key", Destination::Remote).is_none());
+        assert!(
+            s.current_for("user", "api_key", Destination::Remote)
+                .is_none()
+        );
         assert_eq!(
-            s.current_for("user", "api_key", Destination::Local).map(|f| f.value.as_str()),
+            s.current_for("user", "api_key", Destination::Local)
+                .map(|f| f.value.as_str()),
             Some("sk-live")
         );
     }

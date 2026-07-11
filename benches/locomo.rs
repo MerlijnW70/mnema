@@ -1,8 +1,8 @@
 //! Public recall benchmark on **LoCoMo** (Maharana et al., long-conversation memory) — the
 //! retrieval task mnemo and others report on, run deterministically (no LLM judge): ingest every
 //! conversation turn as a memory, then for each question measure whether the gold **evidence**
-//! turns land in engram's top-k. This is a *leaderboard-comparable* recall number, unlike the
-//! in-repo `recall` bench (which is engram's own paraphrase fixture).
+//! turns land in mnema's top-k. This is a *leaderboard-comparable* recall number, unlike the
+//! in-repo `recall` bench (which is mnema's own paraphrase fixture).
 //!
 //! The dataset is not vendored (it's a third party's, ~2.8 MB). Download it and point at it:
 //! ```bash
@@ -23,24 +23,34 @@
 //! (all-MiniLM-L6-v2 + dense-weighted) path. Full-dataset result (2026-07): lexical R@5 0.225 /
 //! R@10 0.323 · semantic R@5 0.385 / R@10 0.453 (+16.0 pts R@5 over 1981 questions).
 
-use engram::facade::Engram;
-use engram::retrieval::RetrievalWeights;
-use engram::vector::Embedder;
-use engram::{Destination, EgressTier};
+#[cfg(all(feature = "secure", feature = "local-embed"))]
+use mnema::{
+    Destination, EgressTier, facade::Mnema, retrieval::RetrievalWeights, vector::Embedder,
+};
+#[cfg(all(feature = "secure", feature = "local-embed"))]
 use std::collections::HashMap;
 
 /// Pull the dia_ids (`D<session>:<turn>`) out of LoCoMo's `evidence` field, which is a *stringified*
 /// Python list like `"['D1:3', 'D2:5']"` — scan for the `D…:…` token shape rather than JSON-parsing it.
+#[cfg(all(feature = "secure", feature = "local-embed"))]
 fn evidence_ids(raw: &str) -> Vec<String> {
     let cleaned: String = raw
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == ':' { c } else { ' ' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == ':' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
     cleaned
         .split_whitespace()
         .filter(|t| {
             let b = t.as_bytes();
-            b.first() == Some(&b'D') && t.contains(':') && t[1..].chars().next().is_some_and(|c| c.is_ascii_digit())
+            b.first() == Some(&b'D')
+                && t.contains(':')
+                && t[1..].chars().next().is_some_and(|c| c.is_ascii_digit())
         })
         .map(str::to_string)
         .collect()
@@ -51,7 +61,14 @@ fn evidence_ids(raw: &str) -> Vec<String> {
 /// 5 and 10 cutoffs). Returns *sums* so a batched caller can aggregate — the semantic path
 /// processes the dataset in batches, reloading the model between them to release the native memory
 /// candle accumulates over thousands of forward passes.
-fn eval_range<E: Embedder>(data: &serde_json::Value, make: impl Fn() -> E, weights: RetrievalWeights, start: usize, end: usize) -> (f64, f64, usize) {
+#[cfg(all(feature = "secure", feature = "local-embed"))]
+fn eval_range<E: Embedder>(
+    data: &serde_json::Value,
+    make: impl Fn() -> E,
+    weights: RetrievalWeights,
+    start: usize,
+    end: usize,
+) -> (f64, f64, usize) {
     let mut r5_sum = 0.0;
     let mut r10_sum = 0.0;
     let mut questions = 0usize;
@@ -59,7 +76,7 @@ fn eval_range<E: Embedder>(data: &serde_json::Value, make: impl Fn() -> E, weigh
     let all = data.as_array().expect("dataset is an array");
     for sample in &all[start..end.min(all.len())] {
         let conv = &sample["conversation"];
-        let mut mem = Engram::new(make());
+        let mut mem = Mnema::new(make());
         let mut id_of: HashMap<String, u64> = HashMap::new();
 
         // Ingest every turn of every session as a memory, keyed by its dia_id.
@@ -70,7 +87,8 @@ fn eval_range<E: Embedder>(data: &serde_json::Value, make: impl Fn() -> E, weigh
                     continue;
                 }
                 for turn in val.as_array().unwrap() {
-                    let (Some(dia), Some(text)) = (turn["dia_id"].as_str(), turn["text"].as_str()) else {
+                    let (Some(dia), Some(text)) = (turn["dia_id"].as_str(), turn["text"].as_str())
+                    else {
                         continue;
                     };
                     let speaker = turn["speaker"].as_str().unwrap_or("");
@@ -81,7 +99,9 @@ fn eval_range<E: Embedder>(data: &serde_json::Value, make: impl Fn() -> E, weigh
         }
 
         for qa in sample["qa"].as_array().into_iter().flatten() {
-            let Some(question) = qa["question"].as_str() else { continue };
+            let Some(question) = qa["question"].as_str() else {
+                continue;
+            };
             let gold_raw = match &qa["evidence"] {
                 serde_json::Value::String(s) => s.clone(),
                 other => other.to_string(),
@@ -99,7 +119,10 @@ fn eval_range<E: Embedder>(data: &serde_json::Value, make: impl Fn() -> E, weigh
             let hits = mem.recall_weighted(question, Destination::Local, 20, 1_000_000, weights);
             let ids: Vec<u64> = hits.iter().take(10).map(|b| b.id).collect();
             let denom = gold.len() as f64;
-            let in5 = gold.iter().filter(|g| ids.iter().take(5).any(|i| i == *g)).count();
+            let in5 = gold
+                .iter()
+                .filter(|g| ids.iter().take(5).any(|i| i == *g))
+                .count();
             let in10 = gold.iter().filter(|g| ids.contains(g)).count();
             r5_sum += in5 as f64 / denom;
             r10_sum += in10 as f64 / denom;
@@ -111,13 +134,14 @@ fn eval_range<E: Embedder>(data: &serde_json::Value, make: impl Fn() -> E, weigh
 
 #[cfg(all(feature = "secure", feature = "local-embed"))]
 fn main() {
-    use engram::embed::HashEmbedder;
-    use engram::model_embed::MiniLmEmbedder;
+    use mnema::embed::HashEmbedder;
+    use mnema::model_embed::MiniLmEmbedder;
 
     let path = std::env::var("LOCOMO_PATH")
         .expect("set LOCOMO_PATH to a downloaded data/locomo10.json (see the bench header)");
     let data: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("read LOCOMO_PATH")).expect("parse LoCoMo json");
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read LOCOMO_PATH"))
+            .expect("parse LoCoMo json");
 
     let total = data.as_array().map_or(0, |a| a.len());
 
@@ -127,16 +151,30 @@ fn main() {
     // across conversations, and a flaky crash retries just that one.
     if let Ok(i) = std::env::var("LOCOMO_ONLY").map(|v| v.parse::<usize>().unwrap()) {
         let model = std::sync::Arc::new(MiniLmEmbedder::load().expect("load all-MiniLM-L6-v2"));
-        let (r5s, r10s, n) = eval_range(&data, || ArcEmbedder(model.clone()), RetrievalWeights::semantic(), i, i + 1);
+        let (r5s, r10s, n) = eval_range(
+            &data,
+            || ArcEmbedder(model.clone()),
+            RetrievalWeights::semantic(),
+            i,
+            i + 1,
+        );
         println!("SEM {r5s} {r10s} {n}");
         return;
     }
 
-    println!("LoCoMo retrieval — mean Recall@k over all answerable questions ({total} conversations)\n");
+    println!(
+        "LoCoMo retrieval — mean Recall@k over all answerable questions ({total} conversations)\n"
+    );
     println!("  config      R@5      R@10     n");
 
     // Lexical: pure Rust, no accumulation — one pass over the whole dataset.
-    let (l5s, l10s, n) = eval_range(&data, || HashEmbedder::new(HashEmbedder::DEFAULT_DIMS), RetrievalWeights::default(), 0, total);
+    let (l5s, l10s, n) = eval_range(
+        &data,
+        || HashEmbedder::new(HashEmbedder::DEFAULT_DIMS),
+        RetrievalWeights::default(),
+        0,
+        total,
+    );
     let (l5, l10) = (l5s / n as f64, l10s / n as f64);
     println!("  lexical     {l5:.3}    {l10:.3}    {n}");
 
@@ -149,7 +187,13 @@ fn main() {
         let end = (start + 4).min(total);
         eprintln!("  [semantic batch {start}..{end}] loading model…");
         let model = std::sync::Arc::new(MiniLmEmbedder::load().expect("load all-MiniLM-L6-v2"));
-        let (a, b, c) = eval_range(&data, || ArcEmbedder(model.clone()), RetrievalWeights::semantic(), start, end);
+        let (a, b, c) = eval_range(
+            &data,
+            || ArcEmbedder(model.clone()),
+            RetrievalWeights::semantic(),
+            start,
+            end,
+        );
         s5s += a;
         s10s += b;
         sn += c;
@@ -158,13 +202,16 @@ fn main() {
     let (s5, s10) = (s5s / sn as f64, s10s / sn as f64);
     println!("  semantic    {s5:.3}    {s10:.3}    {sn}");
 
-    println!("\n  R@5 lift from the semantic path: {:+.1} percentage points", (s5 - l5) * 100.0);
+    println!(
+        "\n  R@5 lift from the semantic path: {:+.1} percentage points",
+        (s5 - l5) * 100.0
+    );
 }
 
-/// A cheap `Embedder` handle so one loaded model is shared across every conversation's `Engram`
+/// A cheap `Embedder` handle so one loaded model is shared across every conversation's `Mnema`
 /// (each `evaluate` call builds a fresh store per sample). Only needed by the semantic path.
 #[cfg(all(feature = "secure", feature = "local-embed"))]
-struct ArcEmbedder(std::sync::Arc<engram::model_embed::MiniLmEmbedder>);
+struct ArcEmbedder(std::sync::Arc<mnema::model_embed::MiniLmEmbedder>);
 #[cfg(all(feature = "secure", feature = "local-embed"))]
 impl Embedder for ArcEmbedder {
     fn dims(&self) -> usize {
@@ -177,5 +224,7 @@ impl Embedder for ArcEmbedder {
 
 #[cfg(not(all(feature = "secure", feature = "local-embed")))]
 fn main() {
-    println!("run with `--features secure,local-embed` and LOCOMO_PATH set (see the bench header).");
+    println!(
+        "run with `--features secure,local-embed` and LOCOMO_PATH set (see the bench header)."
+    );
 }
