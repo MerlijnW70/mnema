@@ -1,5 +1,7 @@
 # mnema
 
+[![CI](https://github.com/MerlijnW70/mnema/actions/workflows/ci.yml/badge.svg)](https://github.com/MerlijnW70/mnema/actions)
+
 **A fast, secure, local-first memory layer for LLMs — where every guarantee is proven, not asserted.**
 
 Most memory layers are a vector database with a nice API. `mnema` is built around the two things
