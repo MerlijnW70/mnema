@@ -20,10 +20,21 @@ use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 
 use crate::{EgressTier, Memory, MemoryId, MemoryKind};
 
-/// On-disk framing: `salt(16) || nonce(24) || ciphertext`. The salt lets `open`
-/// re-derive the key; the 24-byte XChaCha nonce makes a random nonce collision-safe.
+/// On-disk framing: `version(1) || salt(16) || nonce(24) || ciphertext`. The version byte
+/// lets `open` detect the format *before* deriving a key; the salt lets `open` re-derive the
+/// key; the 24-byte XChaCha nonce makes a random nonce collision-safe.
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
+
+/// Current on-disk format version, prepended to every sealed blob. A future format change
+/// (raised Argon2id parameters, a new record field, AEAD associated-data binding) bumps this
+/// and dispatches at `open` time; a blob whose first byte is a version this build does not
+/// understand is **rejected, never guessed**. Adding the byte now — before any real store
+/// exists — is what makes those migrations possible later without silently mis-decoding.
+const FORMAT_VERSION: u8 = 1;
+const VERSION_LEN: usize = 1;
+/// The fixed prefix before the ciphertext: `version(1) || salt(16) || nonce(24)`.
+const HEADER_LEN: usize = VERSION_LEN + SALT_LEN + NONCE_LEN;
 
 /// Everything that can go wrong sealing, opening, or decoding a store.
 #[derive(Debug, PartialEq, Eq)]
@@ -40,6 +51,12 @@ pub enum StoreError {
     BadUtf8,
     /// A kind/tier tag byte was outside its known set.
     UnknownTag,
+    /// The blob's format-version byte is not one this build understands.
+    UnknownVersion,
+    /// The store was sealed with an embedder of a different vector width than the one now
+    /// opening it. Rebuilding the index at the wrong width would silently corrupt recall, so
+    /// the open is refused (ADR-0023) rather than producing a store that quietly mis-retrieves.
+    EmbedderWidthMismatch { stored: u32, embedder: u32 },
 }
 
 fn kind_tag(kind: MemoryKind) -> u8 {
@@ -92,8 +109,9 @@ fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<[u8; 32], StoreError> {
 /// `argon2` crate ever changed its default, every existing store would silently derive a
 /// different key and fail to open. Pinning them here makes the KDF reproducible and
 /// upgrade-safe. These match the current OWASP-recommended defaults; raising them (or adding
-/// AEAD associated-data binding) is a deliberate, versioned format migration — it re-keys
-/// every store and so needs a format byte + migration path, tracked separately.
+/// AEAD associated-data binding) is a deliberate, versioned format migration — now that every
+/// blob carries a [`FORMAT_VERSION`] byte, such a change bumps that version and dispatches the
+/// KDF parameters on it at `open` time, rather than silently re-keying every existing store.
 fn argon2() -> Result<Argon2<'static>, StoreError> {
     let params = Params::new(
         Params::DEFAULT_M_COST,
@@ -283,7 +301,7 @@ impl EpisodicLog {
         Ok(Self { events, next_id })
     }
 
-    /// Encrypt the whole log at rest — `salt || nonce || AEAD(encode())`.
+    /// Encrypt the whole log at rest — `version || salt || nonce || AEAD(encode())`.
     pub fn seal(&self, passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
         seal_bytes(&self.encode(), passphrase)
     }
@@ -295,8 +313,8 @@ impl EpisodicLog {
     }
 }
 
-/// Seal an arbitrary plaintext at rest: `salt || nonce || AEAD(plaintext)`, keying with
-/// Argon2id over a fresh random salt. The single encryption choke point — the episodic
+/// Seal an arbitrary plaintext at rest: `version || salt || nonce || AEAD(plaintext)`, keying
+/// with Argon2id over a fresh random salt. The single encryption choke point — the episodic
 /// log and the whole-`Mnema` facade both seal through here, so the crypto lives in one
 /// audited place.
 pub(crate) fn seal_bytes(plaintext: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
@@ -312,22 +330,39 @@ pub(crate) fn seal_bytes(plaintext: &[u8], passphrase: &[u8]) -> Result<Vec<u8>,
         .encrypt(nonce, plaintext)
         .map_err(|_| StoreError::Decrypt)?;
 
-    let mut out = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
+    let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
+    out.push(FORMAT_VERSION);
     out.extend_from_slice(&salt);
     out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Decrypt a blob sealed by [`seal_bytes`], returning its plaintext. A wrong key or any
-/// tampering fails the AEAD tag → [`StoreError::Decrypt`]; a blob too short to hold the
-/// header is [`StoreError::Truncated`].
-pub(crate) fn open_bytes(bytes: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
-    if bytes.len() < SALT_LEN + NONCE_LEN {
+/// The three borrowed sections of a valid sealed blob: `(salt, nonce, ciphertext)`.
+type SealedParts<'a> = (&'a [u8], &'a [u8], &'a [u8]);
+
+/// Validate a sealed blob's header and split it into `(salt, nonce, ciphertext)`. The single
+/// header-parsing choke point both open paths funnel through: it checks the length (too short
+/// → [`StoreError::Truncated`]) and the format-version byte (unrecognised →
+/// [`StoreError::UnknownVersion`]) before any bytes are interpreted as salt or key material.
+fn split_sealed(bytes: &[u8]) -> Result<SealedParts<'_>, StoreError> {
+    if bytes.len() < HEADER_LEN {
         return Err(StoreError::Truncated);
     }
-    let (salt, rest) = bytes.split_at(SALT_LEN);
-    let (nonce_bytes, ciphertext) = rest.split_at(NONCE_LEN);
+    if bytes[0] != FORMAT_VERSION {
+        return Err(StoreError::UnknownVersion);
+    }
+    let salt = &bytes[VERSION_LEN..VERSION_LEN + SALT_LEN];
+    let nonce = &bytes[VERSION_LEN + SALT_LEN..HEADER_LEN];
+    let ciphertext = &bytes[HEADER_LEN..];
+    Ok((salt, nonce, ciphertext))
+}
+
+/// Decrypt a blob sealed by [`seal_bytes`], returning its plaintext. A wrong key or any
+/// tampering fails the AEAD tag → [`StoreError::Decrypt`]; a blob too short to hold the
+/// header is [`StoreError::Truncated`]; an unknown format version is [`StoreError::UnknownVersion`].
+pub(crate) fn open_bytes(bytes: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
+    let (salt, nonce_bytes, ciphertext) = split_sealed(bytes)?;
     let key = derive_key(passphrase, salt)?;
     let cipher = XChaCha20Poly1305::new_from_slice(&key).map_err(|_| StoreError::KeyDerivation)?;
     let nonce = XNonce::from_slice(nonce_bytes);
@@ -344,8 +379,8 @@ pub(crate) fn open_bytes(bytes: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, Sto
 ///
 /// Security is unchanged from [`seal_bytes`]: every `seal` draws a **fresh** 24-byte XChaCha
 /// nonce, so reusing the key + salt across seals of one store is safe (a nonce is what must be
-/// unique, never the salt). The blob format is identical (`salt || nonce || ciphertext`), so a
-/// store sealed this way opens with plain [`open_bytes`] and vice versa.
+/// unique, never the salt). The blob format is identical (`version || salt || nonce ||
+/// ciphertext`), so a store sealed this way opens with plain [`open_bytes`] and vice versa.
 pub(crate) struct SealingKey {
     /// The passphrase this key was derived from — kept so a caller that seals with a *different*
     /// passphrase (e.g. `mnema rekey`) re-derives instead of silently reusing the old key.
@@ -384,13 +419,15 @@ impl SealingKey {
         self.passphrase == passphrase
     }
 
-    /// The salt prefixing a sealed blob, so the key can be reconstructed to open it.
+    /// The salt prefixing a sealed blob (after the version byte), so the key can be
+    /// reconstructed to open it. The version itself is validated on the `open` path.
     pub(crate) fn salt_of(blob: &[u8]) -> Result<[u8; SALT_LEN], StoreError> {
-        let (salt, _) = take_slice(blob, 0, SALT_LEN)?;
+        let (salt, _) = take_slice(blob, VERSION_LEN, SALT_LEN)?;
         Ok(salt.try_into().unwrap())
     }
 
-    /// Seal `plaintext` under this key with a **fresh** nonce — no KDF. `salt || nonce || ct`.
+    /// Seal `plaintext` under this key with a **fresh** nonce — no KDF.
+    /// `version || salt || nonce || ct`.
     pub(crate) fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         getrandom::getrandom(&mut nonce_bytes).map_err(|_| StoreError::Entropy)?;
@@ -400,7 +437,8 @@ impl SealingKey {
         let ciphertext = cipher
             .encrypt(nonce, plaintext)
             .map_err(|_| StoreError::Decrypt)?;
-        let mut out = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
+        let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
+        out.push(FORMAT_VERSION);
         out.extend_from_slice(&self.salt);
         out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ciphertext);
@@ -408,13 +446,10 @@ impl SealingKey {
     }
 
     /// Decrypt a blob produced by [`seal`](SealingKey::seal) (or [`seal_bytes`]) under this key —
-    /// no KDF, since the key is already in hand. A wrong key or tampering fails the AEAD tag.
+    /// no KDF, since the key is already in hand. A wrong key or tampering fails the AEAD tag; an
+    /// unknown format version is rejected before the key is touched.
     pub(crate) fn open(&self, blob: &[u8]) -> Result<Vec<u8>, StoreError> {
-        if blob.len() < SALT_LEN + NONCE_LEN {
-            return Err(StoreError::Truncated);
-        }
-        let (_salt, rest) = blob.split_at(SALT_LEN);
-        let (nonce_bytes, ciphertext) = rest.split_at(NONCE_LEN);
+        let (_salt, nonce_bytes, ciphertext) = split_sealed(blob)?;
         let cipher =
             XChaCha20Poly1305::new_from_slice(&self.key).map_err(|_| StoreError::KeyDerivation)?;
         let nonce = XNonce::from_slice(nonce_bytes);
@@ -580,12 +615,49 @@ mod tests {
 
     #[test]
     fn a_blob_of_exactly_the_header_length_reaches_the_aead() {
-        // salt(16) + nonce(24) = 40 bytes, zero ciphertext. This pins the `<`
-        // boundary in `open`: at len == 40 the header IS present (not Truncated), so
-        // control reaches the AEAD, which rejects the empty ciphertext → Decrypt.
-        // Flipping `<` to `<=` would wrongly report Truncated here instead.
-        let blob = [0u8; SALT_LEN + NONCE_LEN];
+        // version(1) + salt(16) + nonce(24) = HEADER_LEN bytes, zero ciphertext. Pins the `<`
+        // boundary in `split_sealed`: at len == HEADER_LEN the header IS present (not Truncated)
+        // and the version is valid, so control reaches the AEAD, which rejects the empty
+        // ciphertext → Decrypt. Flipping `<` to `<=` would wrongly report Truncated here.
+        let mut blob = [0u8; HEADER_LEN];
+        blob[0] = FORMAT_VERSION;
         assert_eq!(EpisodicLog::open(&blob, b"k"), Err(StoreError::Decrypt));
+    }
+
+    #[test]
+    fn seal_prepends_the_current_format_version() {
+        let sealed = sample().seal(b"k").unwrap();
+        assert_eq!(sealed[0], FORMAT_VERSION);
+        // and the header is exactly one byte longer than the old salt||nonce prefix
+        assert!(sealed.len() > HEADER_LEN);
+    }
+
+    #[test]
+    fn an_unknown_format_version_is_rejected_before_the_key() {
+        let mut sealed = sample().seal(b"k").unwrap();
+        sealed[0] = FORMAT_VERSION.wrapping_add(7); // a version this build does not know
+        assert_eq!(
+            EpisodicLog::open(&sealed, b"k"),
+            Err(StoreError::UnknownVersion)
+        );
+    }
+
+    #[test]
+    fn sealing_key_round_trips_with_the_version_and_rejects_a_bad_one() {
+        let key = SealingKey::derive(b"pw").unwrap();
+        let blob = key.seal(b"hello world").unwrap();
+        assert_eq!(blob[0], FORMAT_VERSION);
+        assert_eq!(key.open(&blob).unwrap(), b"hello world");
+
+        // salt_of reads the salt *after* the version byte, so the key reconstructs and opens
+        let salt = SealingKey::salt_of(&blob).unwrap();
+        let same = SealingKey::for_salt(b"pw", salt).unwrap();
+        assert_eq!(same.open(&blob).unwrap(), b"hello world");
+
+        // an unknown version is rejected on the cached-key path too, before the AEAD
+        let mut bad = blob.clone();
+        bad[0] ^= 0xFF;
+        assert_eq!(key.open(&bad), Err(StoreError::UnknownVersion));
     }
 
     #[test]
