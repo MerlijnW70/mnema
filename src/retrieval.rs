@@ -130,37 +130,72 @@ pub fn rrf_fuse_weighted(rankings: &[(f32, &[MemoryId])]) -> Vec<Fused> {
     acc
 }
 
-/// Rank memories by descending count of distinct query terms found in their content
-/// (a cheap lexical signal). Only memories with at least one shared term are returned;
-/// ties keep input order (the sort is stable).
-pub fn keyword_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
-    // De-duplicate the query terms: the score is the count of *distinct* query terms a
-    // memory contains, so `"dog dog cat"` must not score a "dog" memory twice and outrank
-    // an equally-relevant "cat" memory (the terms are iterated and counted, unlike the
-    // content tokens which are only membership-tested).
-    let mut terms = tokenize(query);
-    terms.sort();
-    terms.dedup();
-    let mut scored: Vec<(MemoryId, usize)> = memories
+/// Okapi BM25 tuning constants (the standard defaults): `k1` controls term-frequency
+/// saturation, `b` the document-length normalization.
+const BM25_K1: f32 = 1.2;
+const BM25_B: f32 = 0.75;
+
+/// The BM25 contribution of one query term to one document. `tf` = the term's frequency in
+/// the document, `df` = number of documents containing it, `n` = corpus size, `dl` = this
+/// document's length, `avgdl` = mean document length. Uses the Lucene BM25 IDF
+/// `ln(1 + (n - df + 0.5)/(df + 0.5))`, which is always non-negative.
+fn bm25_term_score(tf: f32, df: f32, n: f32, dl: f32, avgdl: f32) -> f32 {
+    let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
+    let norm = tf * (BM25_K1 + 1.0) / (tf + BM25_K1 * (1.0 - BM25_B + BM25_B * dl / avgdl));
+    idf * norm
+}
+
+/// Rank memories by **BM25** relevance to `query` — a rare query term outweighs a common one
+/// (IDF), extra repetitions of a term give diminishing returns (`k1`), and a hit in a short
+/// memory outweighs the same hit in a long one (`b`). Only memories containing at least one
+/// query term are returned; ties keep input order (the sort is stable).
+/// Mean document length over the corpus, floored at `1.0` so BM25's length term stays finite
+/// on a degenerate all-empty corpus (where, having no term matches, it is never consulted).
+fn avg_len(total_len: usize, n: f32) -> f32 {
+    (total_len as f32 / n).max(1.0)
+}
+
+pub fn bm25_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
+    let mut q_terms = tokenize(query);
+    q_terms.sort();
+    q_terms.dedup();
+
+    // Tokenize each memory once, then gather the corpus statistics BM25 needs. Empty inputs —
+    // no query terms, or no memories — simply produce no scored documents below (a term never
+    // contributes, or there is nothing to score), so no special-case guard is needed.
+    let docs: Vec<(MemoryId, Vec<String>)> = memories
         .iter()
-        .filter_map(|m| {
-            let content = tokenize(&m.content);
-            let overlap = terms.iter().filter(|t| content.contains(t)).count();
-            if overlap > 0 {
-                Some((m.id, overlap))
-            } else {
-                None
+        .map(|m| (m.id, tokenize(&m.content)))
+        .collect();
+    let n = docs.len() as f32;
+    let total_len: usize = docs.iter().map(|(_, d)| d.len()).sum();
+    let avgdl = avg_len(total_len, n);
+    let df: Vec<f32> = q_terms
+        .iter()
+        .map(|t| docs.iter().filter(|(_, d)| d.contains(t)).count() as f32)
+        .collect();
+
+    let mut scored: Vec<(MemoryId, f32)> = docs
+        .iter()
+        .filter_map(|(id, doc)| {
+            let dl = doc.len() as f32;
+            let mut score = 0.0f32;
+            for (t, &df_t) in q_terms.iter().zip(&df) {
+                // A term absent from this document has tf = 0, so its BM25 contribution is 0;
+                // summing it unconditionally is exact and needs no `tf > 0` guard.
+                let tf = doc.iter().filter(|w| w.as_str() == t.as_str()).count() as f32;
+                score += bm25_term_score(tf, df_t, n, dl, avgdl);
             }
+            (score > 0.0).then_some((*id, score))
         })
         .collect();
-    scored.sort_by_key(|b| std::cmp::Reverse(b.1));
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
     scored.into_iter().map(|(id, _)| id).collect()
 }
 
-/// Lowercase, split on non-alphanumeric, drop empties. Callers that *count* the tokens
-/// (the query side of `keyword_rank`) must de-duplicate first, since a repeated token
-/// would otherwise be counted more than once; callers that only membership-test them
-/// (the content side) need not.
+/// Lowercase, split on non-alphanumeric, drop empties. The query side of [`bm25_rank`]
+/// de-duplicates these so a repeated query term contributes once; the document side keeps
+/// repetitions, since BM25 scores term frequency.
 fn tokenize(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -231,7 +266,7 @@ pub fn fuse_and_pack(
         .map(|m| m.id)
         .collect();
 
-    let keyword: Vec<MemoryId> = keyword_rank(query, memories)
+    let keyword: Vec<MemoryId> = bm25_rank(query, memories)
         .into_iter()
         .take(per_retriever)
         .collect();
@@ -339,34 +374,66 @@ mod tests {
     }
 
     #[test]
-    fn keyword_rank_orders_by_overlap_and_excludes_non_matches() {
-        let mems = vec![
-            mem(1, EgressTier::Open, 1, "the cat and the dog"), // matches cat, dog → 2
-            mem(2, EgressTier::Open, 2, "the dog ran"),         // matches dog → 1
-            mem(3, EgressTier::Open, 3, "a bird flew"),         // no overlap → excluded
-        ];
-        let ranked = keyword_rank("cat dog", &mems);
-        assert_eq!(ranked, vec![1, 2]); // 3 is absent; 1 outranks 2 by overlap
+    fn bm25_term_score_matches_the_hand_computed_formula() {
+        // Every operator in the formula is pinned by an exact value:
+        // tf=1, df=1, n=2, dl=avgdl=3  →  idf=ln(2), norm=1.0  →  ln(2).
+        assert!((bm25_term_score(1.0, 1.0, 2.0, 3.0, 3.0) - 2.0_f32.ln()).abs() < 1e-5);
+        // A common term (df=2) earns a smaller IDF: ln(1 + 0.5/2.5) = ln(1.2).
+        assert!((bm25_term_score(1.0, 2.0, 2.0, 3.0, 3.0) - 1.2_f32.ln()).abs() < 1e-5);
+        // A longer document (dl=6, avgdl=3) is penalized: norm = 2.2 / 3.1.
+        let long = bm25_term_score(1.0, 1.0, 2.0, 6.0, 3.0);
+        assert!((long - 2.0_f32.ln() * (2.2 / 3.1)).abs() < 1e-5);
+        // Repetition raises the score, but sub-linearly (saturation via k1).
+        assert!(
+            bm25_term_score(3.0, 1.0, 2.0, 3.0, 3.0) > bm25_term_score(1.0, 1.0, 2.0, 3.0, 3.0)
+        );
     }
 
     #[test]
-    fn keyword_rank_is_case_insensitive_and_tokenized() {
+    fn bm25_rank_orders_by_rarity_and_excludes_non_matches() {
+        // "the" is in both matches (common → low IDF); "cat" is rare (high IDF). The memory
+        // with the rare term outranks the one with only the common term; a memory with
+        // neither query term is excluded entirely.
+        let mems = vec![
+            mem(1, EgressTier::Open, 1, "the dog ran"), // "the" only
+            mem(2, EgressTier::Open, 2, "the cat sat"), // "the" + rare "cat"
+            mem(3, EgressTier::Open, 3, "a bird flew"), // neither → excluded
+        ];
+        assert_eq!(bm25_rank("the cat", &mems), vec![2, 1]);
+    }
+
+    #[test]
+    fn bm25_rank_prefers_the_shorter_of_two_equal_matches() {
+        // Both contain "signal" once; length normalization ranks the shorter memory first.
+        let mems = vec![
+            mem(
+                1,
+                EgressTier::Open,
+                1,
+                "signal amid a great deal of extra padding words here",
+            ),
+            mem(2, EgressTier::Open, 2, "signal short"),
+        ];
+        assert_eq!(bm25_rank("signal", &mems), vec![2, 1]);
+    }
+
+    #[test]
+    fn bm25_rank_matches_case_insensitively() {
         let mems = vec![mem(1, EgressTier::Open, 1, "The CAT, sat!")];
-        assert_eq!(keyword_rank("cat", &mems), vec![1]);
+        assert_eq!(bm25_rank("cat", &mems), vec![1]);
     }
 
     #[test]
-    fn keyword_rank_counts_distinct_terms_not_repetitions() {
-        // The query `"dog dog cat"` shares the DISTINCT terms {dog, cat}. A "cat"-only and
-        // a "dog"-only memory therefore tie at overlap 1. If the duplicate "dog" were
-        // double-counted, the dog memory would score 2 and jump ahead — so ordering the
-        // cat memory first in input and asserting it stays first pins the dedup:
-        //   correct → tie, input order [1, 2];  double-counting → [2, 1].
-        let mems = vec![
-            mem(1, EgressTier::Open, 2, "cat and mouse"), // distinct overlap {cat} → 1
-            mem(2, EgressTier::Open, 1, "the dog"),       // distinct overlap {dog} → 1 (was 2)
-        ];
-        assert_eq!(keyword_rank("dog dog cat", &mems), vec![1, 2]);
+    fn bm25_rank_is_empty_for_no_query_terms_or_no_memories() {
+        let mems = vec![mem(1, EgressTier::Open, 1, "a stored memory")];
+        assert!(bm25_rank("   ", &mems).is_empty()); // no query terms
+        assert!(bm25_rank("memory", &[]).is_empty()); // no memories
+    }
+
+    #[test]
+    fn avg_len_is_the_mean_document_length_floored_at_one() {
+        assert_eq!(avg_len(12, 2.0), 6.0);
+        assert_eq!(avg_len(0, 3.0), 1.0); // floored to 1.0, never 0 (keeps the length term finite)
     }
 
     #[test]
