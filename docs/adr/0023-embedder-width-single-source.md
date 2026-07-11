@@ -11,7 +11,7 @@ supersedes:
 superseded_by:
 source_parts: 25
 decided: 2026-07
-summary: The built-in embedder's dimensionality was a private `const DIMS` duplicated in each binary — the `engram` CLI on 64, the `engram-mcp` server on 128 — over one shared store family, so a query vector could be a different width than the stored vectors and silently corrupt recall. Pin it once as `HashEmbedder::DEFAULT_DIMS = 128` in the library and have both binaries reference it, making the agreement structural instead of a convention two crates can drift apart on.
+summary: The built-in embedder's dimensionality was a private `const DIMS` duplicated in each binary — the `mnema` CLI on 64, the `mnema-mcp` server on 128 — over one shared store family, so a query vector could be a different width than the stored vectors and silently corrupt recall. Pin it once as `HashEmbedder::DEFAULT_DIMS = 128` in the library and have both binaries reference it, making the agreement structural instead of a convention two crates can drift apart on.
 ---
 
 # ADR-0023 — One embedder width, pinned in the library
@@ -19,15 +19,15 @@ summary: The built-in embedder's dimensionality was a private `const DIMS` dupli
 ## Context — what problem did we solve?
 The built-in `HashEmbedder` (ADR-0012 "own your hasher") takes its width as a runtime
 argument, and each binary that constructs one carried its own `const DIMS`. Two binaries
-operate the **same store family** — the `engram` CLI (I/O glue below noha's waterline, ADR-0022)
-and the `engram-mcp` server — and they had drifted apart: the CLI embedded at **64**, the
+operate the **same store family** — the `mnema` CLI (I/O glue below noha's waterline, ADR-0022)
+and the `mnema-mcp` server — and they had drifted apart: the CLI embedded at **64**, the
 server at **128**. Sealing/opening a store is dimension-agnostic (it is just crypto over a
 blob, ADR-0020), so nothing *fails loudly*. But a query embedded at one width against vectors
 stored at another makes cosine similarity meaningless: recall silently degrades to noise. It
 is the worst kind of bug — no crash, no error, just quietly wrong retrieval.
 
 Nothing triggered it *yet* (the CLI's evolution-loop caller does not exist in this repo), but
-the trap was armed: the day a loop drives `engram recall` against the server-written store, its
+the trap was armed: the day a loop drives `mnema recall` against the server-written store, its
 recall breaks with no signal.
 
 ## Decision

@@ -5,13 +5,13 @@ kind: decision
 status: accepted
 impact: high
 domain: self-evolution, proposer, memory, feedback
-tags: evolve, proposer, memory, engram, recall, history, ledger, feedback, cli, waterline, opt-in, cross-iteration
+tags: evolve, proposer, memory, mnema, recall, history, ledger, feedback, cli, waterline, opt-in, cross-iteration
 relates_to: ADR-0006, ADR-0014, ADR-0020
 supersedes:
 superseded_by:
 source_parts:
 decided: 2026-07
-summary: Give the evolution loop's proposer an opt-in Engram memory of its OWN past iterations — recall the lessons most relevant to this substrate before proposing, remember every verdict after — a queryable, cross-iteration successor to the flat history.json ledger, bridged by a thin `engram` CLI that is I/O glue below noha's behavioral waterline.
+summary: Give the evolution loop's proposer an opt-in Mnema memory of its OWN past iterations — recall the lessons most relevant to this substrate before proposing, remember every verdict after — a queryable, cross-iteration successor to the flat history.json ledger, bridged by a thin `mnema` CLI that is I/O glue below noha's behavioral waterline.
 ---
 
 # ADR-0022 — Memory-augmented self-evolution
@@ -27,15 +27,15 @@ failure indefinitely. We had just built a memory layer (ADR-0020) whose episodic
 semantic + decay machinery is exactly the missing capability.
 
 ## Decision
-Give the proposer an **opt-in** (`EVOLVE_MEMORY=1`) Engram memory of the loop's own
+Give the proposer an **opt-in** (`EVOLVE_MEMORY=1`) Mnema memory of the loop's own
 history. Before PROPOSE, `evolve.sh` **recalls** the lessons most relevant to the
 current substrate/regime and injects them into the prompt ("PRIOR LESSONS — do not
 repeat a REJECTED approach; build on an ACCEPTED one"). After the verdict it
 **remembers** the outcome (accept summary, or reject reason + detail code). The bridge
-is a thin `engram` CLI (`src/bin/engram.rs`): it only parses args, loads/seals the
+is a thin `mnema` CLI (`src/bin/mnema.rs`): it only parses args, loads/seals the
 on-disk store, and prints — **I/O orchestration below noha's behavioral waterline**
 (Part 23), exactly like `evolve.sh` itself. All real memory logic is the ratchet-pinned
-facade. It degrades to a silent no-op unless enabled, `$ENGRAM_KEY` is set, and the CLI
+facade. It degrades to a silent no-op unless enabled, `$MNEMA_KEY` is set, and the CLI
 is built, so every existing loop is byte-for-byte unaffected.
 
 ## Trade-offs — what did we lose to win?
@@ -53,7 +53,7 @@ survivors**, including the new built-in `HashEmbedder`, whose exact FNV mixing i
 by a golden-witness test (ADR-0012's "own your hasher", so no equivalent-mutant escape).
 The CLI + `evolve.sh` wiring are glue, verified by demonstration: a real `evolve.sh`
 iteration with `EVOLVE_MEMORY=1` printed `MEMORY: injected 2 recalled lesson(s) into the
-proposer prompt`; a wrong `$ENGRAM_KEY` cannot open the store; and with the flag off the
+proposer prompt`; a wrong `$MNEMA_KEY` cannot open the store; and with the flag off the
 run is identical to before (no injection).
 
 ## Consequences — how does this affect future evolution?
@@ -69,5 +69,5 @@ the operator turns on, never a silent change to the certified loop.
 - Narrative: (no `SELF-EVOLUTION.md` Part yet — add on the next write-up)
 - ADR-0006 — the anti-reroll `history.json` ledger this augments (verbatim block → recall)
 - ADR-0014 — Repair-Request feedback: a per-run signal this generalizes to cross-run memory
-- ADR-0020 — the Engram memory layer the proposer now uses
+- ADR-0020 — the Mnema memory layer the proposer now uses
 - BND-tested-not-correct — why the recall *quality* (and the glue) sit below the ratchet

@@ -5,12 +5,12 @@ kind: decision
 status: accepted
 impact: medium
 domain: storage, crypto, memory-layer, local-first
-tags: persistence, encryption, hard-delete, argon2, append-only, log-structured, engram, storage, sota
+tags: persistence, encryption, hard-delete, argon2, append-only, log-structured, mnema, storage, sota
 relates_to: ADR-0020, ADR-0021
 supersedes:
 superseded_by:
 decided: 2026-07
-summary: engram persists the whole store as one re-encrypted blob per write, not an append-only log. With the derived key cached (Argon2id run once per store, not per write) a save is ~1&nbsp;ms at 10k memories and ~11&nbsp;ms at 100k — cheap enough at this layer's scale — and a whole-store rewrite is precisely what makes `forget` a **true immediate physical delete**. An append-only log would defer physical deletion to a later compaction, weakening the hard-delete guarantee, in exchange for a write-latency win that does not matter here. Revisit if save latency at a realistic N becomes a problem, or if the hard-delete guarantee is deliberately relaxed.
+summary: mnema persists the whole store as one re-encrypted blob per write, not an append-only log. With the derived key cached (Argon2id run once per store, not per write) a save is ~1&nbsp;ms at 10k memories and ~11&nbsp;ms at 100k — cheap enough at this layer's scale — and a whole-store rewrite is precisely what makes `forget` a **true immediate physical delete**. An append-only log would defer physical deletion to a later compaction, weakening the hard-delete guarantee, in exchange for a write-latency win that does not matter here. Revisit if save latency at a realistic N becomes a problem, or if the hard-delete guarantee is deliberately relaxed.
 ---
 
 # ADR-0024 — Whole-store seal over an append-only log
@@ -18,10 +18,10 @@ summary: engram persists the whole store as one re-encrypted blob per write, not
 ## Context — what problem was raised?
 
 A SOTA benchmark of the local-first agent-memory field (`.sota/`) flags one table-stakes
-capability engram does not have: **incremental persistence**. Every direct peer — Perseus
+capability mnema does not have: **incremental persistence**. Every direct peer — Perseus
 Vault, ai-memory-mcp, mnemo, sqlite-memory, Memoria — writes incrementally to SQLite /
-DuckDB / a WAL, so a single memory append touches only that memory. engram instead
-re-encodes and re-encrypts the **entire store** on every write (`Engram::seal`), which is
+DuckDB / a WAL, so a single memory append touches only that memory. mnema instead
+re-encodes and re-encrypts the **entire store** on every write (`Mnema::seal`), which is
 O(N) in the number of memories.
 
 Two facts reframe the question before we "fix" it:
@@ -34,7 +34,7 @@ Two facts reframe the question before we "fix" it:
    per memory — cheap through and past this layer's realistic scale (a personal/agent memory
    of thousands, not a multi-tenant database).
 
-2. **Whole-store rewrite is *how* engram keeps its hard-delete guarantee.** `forget` is
+2. **Whole-store rewrite is *how* mnema keeps its hard-delete guarantee.** `forget` is
    documented and pinned as a *true* delete: the forgotten bytes are gone from state and from
    every re-sealed blob, and the id is never reused (ADR-0021 neighbourhood; `store` tests).
    That guarantee exists *because* a save rewrites the whole blob without the forgotten
@@ -46,12 +46,12 @@ Two facts reframe the question before we "fix" it:
 
 ## Decision
 
-**Keep whole-store seal.** engram persists by re-encrypting the entire store on each write,
+**Keep whole-store seal.** mnema persists by re-encrypting the entire store on each write,
 with the Argon2id-derived key cached so the write is just encode + AEAD. `forget` remains an
-immediate physical delete by construction. engram will **not** adopt an append-only log for
+immediate physical delete by construction. mnema will **not** adopt an append-only log for
 persistence at this time.
 
-The SOTA "incremental persistence" row is therefore, for engram, a **deliberate design
+The SOTA "incremental persistence" row is therefore, for mnema, a **deliberate design
 trade-off — immediate hard-delete over append-only write latency — not an unmet requirement.**
 
 ## Consequences
@@ -62,7 +62,7 @@ trade-off — immediate hard-delete over append-only write latency — not an un
   "deleted" memory left on disk.
 - The store remains one portable, encrypted file with no embedded database dependency, which
   keeps the `secure` feature's dependency budget small (ADR-0020).
-- engram does not match peers on the literal "incremental write" capability; the scan reflects
+- mnema does not match peers on the literal "incremental write" capability; the scan reflects
   this honestly and points here for the rationale.
 
 ## Alternatives considered
@@ -81,7 +81,7 @@ trade-off — immediate hard-delete over append-only write latency — not an un
 
 Reopen this decision if **either**:
 
-1. Whole-store save latency becomes a real problem at a scale engram actually targets (watch
+1. Whole-store save latency becomes a real problem at a scale mnema actually targets (watch
    the `persist` bench — e.g. if a realistic corpus pushes a save past a human-perceptible
    threshold), **or**
 2. The immediate-hard-delete guarantee is deliberately relaxed (at which point append-only

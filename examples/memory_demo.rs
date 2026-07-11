@@ -1,4 +1,4 @@
-//! A live, self-verifying tour of the Engram memory layer (run with
+//! A live, self-verifying tour of the Mnema memory layer (run with
 //! `cargo run --example memory_demo --features secure`).
 //!
 //! Every line marked ✓ is a guarantee the noha mutation ratchet *proves* elsewhere in
@@ -6,13 +6,13 @@
 //! The demo `assert!`s each guarantee, so a broken one aborts the run rather than
 //! printing a comforting lie. That is the whole point: a green build means something.
 
-use engram::facade::Engram;
-use engram::vector::Embedder;
-use engram::{Destination, EgressTier};
+use mnema::facade::Mnema;
+use mnema::vector::Embedder;
+use mnema::{Destination, EgressTier};
 
 /// A tiny dependency-free bag-of-words embedder (FNV-1a hashing trick): each token
 /// bumps one dimension, so texts that share words land near each other. Stands in for
-/// a real local model — Engram takes any `Embedder` (ADR-0020's bring-your-own seam).
+/// a real local model — Mnema takes any `Embedder` (ADR-0020's bring-your-own seam).
 struct HashEmbedder {
     dims: usize,
 }
@@ -47,15 +47,13 @@ fn ok(msg: &str) {
     println!("   \x1b[32m✓\x1b[0m {msg}");
 }
 
-fn texts(bundle: &[engram::BundleItem]) -> Vec<&str> {
+fn texts(bundle: &[mnema::BundleItem]) -> Vec<&str> {
     bundle.iter().map(|b| b.text.as_str()).collect()
 }
 
 fn main() {
-    println!(
-        "\x1b[1m═══ Engram: a memory layer where every guarantee is ratchet-proven ═══\x1b[0m"
-    );
-    let mut mem = Engram::new(HashEmbedder { dims: 64 });
+    println!("\x1b[1m═══ Mnema: a memory layer where every guarantee is ratchet-proven ═══\x1b[0m");
+    let mut mem = Mnema::new(HashEmbedder { dims: 64 });
 
     // ---------------------------------------------------------------------------
     header(1, "Remember a session's worth of events and facts");
@@ -154,9 +152,9 @@ fn main() {
     println!("   sealed to {} bytes of ciphertext", blob.len());
     assert!(!blob.windows(7).any(|w| w == b"Utrecht"));
     ok("no plaintext survives in the blob (a stolen disk yields ciphertext only)");
-    assert!(Engram::open(&blob, b"wrong key", HashEmbedder { dims: 64 }).is_err());
+    assert!(Mnema::open(&blob, b"wrong key", HashEmbedder { dims: 64 }).is_err());
     ok("a wrong passphrase cannot open it");
-    let restored = Engram::open(
+    let restored = Mnema::open(
         &blob,
         b"correct horse battery staple",
         HashEmbedder { dims: 64 },

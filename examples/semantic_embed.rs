@@ -10,8 +10,8 @@
 //! higher than an unrelated sentence that happens to share stop-words. A hashed bag-of-words
 //! embedder cannot do this (no shared content tokens → ~0 similarity both ways).
 
-use engram::model_embed::MiniLmEmbedder;
-use engram::vector::Embedder;
+use mnema::model_embed::MiniLmEmbedder;
+use mnema::vector::Embedder;
 
 /// Cosine of two L2-normalised vectors is just their dot product.
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -42,6 +42,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sim_para > sim_unrel,
         "semantic embedder failed: paraphrase ({sim_para:.3}) should beat unrelated ({sim_unrel:.3})"
     );
-    println!("✅ semantic recall works: the paraphrase ({sim_para:.3}) outranks the unrelated sentence ({sim_unrel:.3}).");
+    println!(
+        "✅ semantic recall works: the paraphrase ({sim_para:.3}) outranks the unrelated sentence ({sim_unrel:.3})."
+    );
     Ok(())
 }

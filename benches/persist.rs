@@ -1,7 +1,7 @@
 //! Persistence cost: whole-store `seal()` latency as the corpus grows, with the derived key
 //! already cached (so this is the encode + XChaCha encrypt, NOT the one-time Argon2id KDF).
 //!
-//! engram persists the **whole store** per write rather than appending to a log — a deliberate
+//! mnema persists the **whole store** per write rather than appending to a log — a deliberate
 //! choice so that `forget` is a *true immediate physical delete* (the rewritten blob simply does
 //! not contain the forgotten bytes). See [ADR-0024]. This benchmark is the evidence that the
 //! whole-store write stays cheap at this layer's scale once the KDF is cached; if it stopped
@@ -13,18 +13,21 @@
 
 #[cfg(feature = "secure")]
 fn main() {
-    use engram::EgressTier;
-    use engram::embed::HashEmbedder;
-    use engram::facade::Engram;
+    use mnema::EgressTier;
+    use mnema::embed::HashEmbedder;
+    use mnema::facade::Mnema;
     use std::time::Instant;
 
     let key = b"persist-bench-key";
     println!("whole-store seal() latency vs N (derived key cached — no per-write Argon2id):\n");
     println!("        N    seal_ms");
     for &n in &[1_000u64, 10_000, 50_000, 100_000] {
-        let mut e = Engram::new(HashEmbedder::new(8));
+        let mut e = Mnema::new(HashEmbedder::new(8));
         for _ in 0..n {
-            e.remember(EgressTier::Open, "a memory about various everyday topics and things");
+            e.remember(
+                EgressTier::Open,
+                "a memory about various everyday topics and things",
+            );
         }
         let _ = e.seal(key).unwrap(); // prime the key cache (pays the one-time KDF once)
         let mut samples = Vec::new();

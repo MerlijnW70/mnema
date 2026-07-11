@@ -1,4 +1,4 @@
-//! Encrypted episodic store — Phase-1 slice 2 (`docs/proposals/engram-memory-layer.md`
+//! Encrypted episodic store — Phase-1 slice 2 (`docs/proposals/mnema-memory-layer.md`
 //! §3.1, §6b). An append-only log of episodic memories that is **encrypted at rest**:
 //! the in-memory [`EpisodicLog`] holds events in time order; [`EpisodicLog::seal`]
 //! turns it into an opaque byte blob (Argon2id-derived key + XChaCha20-Poly1305 AEAD)
@@ -297,7 +297,7 @@ impl EpisodicLog {
 
 /// Seal an arbitrary plaintext at rest: `salt || nonce || AEAD(plaintext)`, keying with
 /// Argon2id over a fresh random salt. The single encryption choke point — the episodic
-/// log and the whole-`Engram` facade both seal through here, so the crypto lives in one
+/// log and the whole-`Mnema` facade both seal through here, so the crypto lives in one
 /// audited place.
 pub(crate) fn seal_bytes(plaintext: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
     let mut salt = [0u8; SALT_LEN];
@@ -348,7 +348,7 @@ pub(crate) fn open_bytes(bytes: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, Sto
 /// store sealed this way opens with plain [`open_bytes`] and vice versa.
 pub(crate) struct SealingKey {
     /// The passphrase this key was derived from — kept so a caller that seals with a *different*
-    /// passphrase (e.g. `engram rekey`) re-derives instead of silently reusing the old key.
+    /// passphrase (e.g. `mnema rekey`) re-derives instead of silently reusing the old key.
     passphrase: Vec<u8>,
     salt: [u8; SALT_LEN],
     key: [u8; 32],

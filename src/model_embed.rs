@@ -73,8 +73,7 @@ impl MiniLmEmbedder {
         // SAFE load (read bytes → from_slice_safetensors), not the unsafe mmap variant — the
         // crate forbids unsafe. Costs one full read of the weights; fine for a one-time load.
         let weights = std::fs::read(weights_path).map_err(err)?;
-        let vb =
-            VarBuilder::from_slice_safetensors(&weights, DTYPE, &device).map_err(err)?;
+        let vb = VarBuilder::from_slice_safetensors(&weights, DTYPE, &device).map_err(err)?;
         let model = BertModel::load(vb, &config).map_err(err)?;
 
         Ok(Self {
@@ -123,7 +122,7 @@ impl Embedder for MiniLmEmbedder {
                 // Degrade like a broken embedder elsewhere in the crate: a zero vector keeps
                 // the index width consistent (so the memory is stored, just unmatched) rather
                 // than panicking mid-recall.
-                eprintln!("engram: MiniLmEmbedder inference failed ({e}); returning zero vector");
+                eprintln!("mnema: MiniLmEmbedder inference failed ({e}); returning zero vector");
                 vec![0.0; DIMS]
             }
         }

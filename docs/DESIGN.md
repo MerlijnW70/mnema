@@ -1,9 +1,9 @@
-# Proposal: **Engram** — a fast, secure, local-first memory layer for LLMs
+# Proposal: **Mnema** — a fast, secure, local-first memory layer for LLMs
 
 > Status: **DRAFT / RFC** — not an accepted decision. This is the "design doc first"
 > deliverable. Nothing here is built yet. It exists to be argued with before code.
 >
-> Codename **Engram** (a stored memory trace) — a memory engine that sits next to
+> Codename **Mnema** (a stored memory trace) — a memory engine that sits next to
 > `emerge` and reuses its substrates (`bloom.rs`, `cache.rs`) and its correctness
 > discipline (noha: a green build proves the changed logic is *tested*).
 
@@ -144,14 +144,14 @@ Target: recall p50 < 1 ms over 100k memories on a laptop; write p50 < a few ms
 ## 5. API surface
 
 ```rust
-engram.remember(input)                 -> Vec<MemoryId>   // extract+dedup+resolve internally
-engram.recall(query, budget)           -> ContextBundle   // hybrid + assembled, egress-filtered
-engram.forget(filter)                  -> PurgeReceipt     // TRUE hard-delete (log compaction)
-engram.revise(...)                     // handled inside remember(); no manual "update both"
-engram.audit(memory_id)                -> History          // provenance + version chain
+mnema.remember(input)                 -> Vec<MemoryId>   // extract+dedup+resolve internally
+mnema.recall(query, budget)           -> ContextBundle   // hybrid + assembled, egress-filtered
+mnema.forget(filter)                  -> PurgeReceipt     // TRUE hard-delete (log compaction)
+mnema.revise(...)                     // handled inside remember(); no manual "update both"
+mnema.audit(memory_id)                -> History          // provenance + version chain
 ```
 
-Plus an **MCP server** (`engram-mcp`) so any agent uses it tool-to-tool — the exact
+Plus an **MCP server** (`mnema-mcp`) so any agent uses it tool-to-tool — the exact
 pattern this repo already ships for `noha-mcp`. That is how "any LLM" gets the memory,
 without an SDK per language.
 
@@ -196,7 +196,7 @@ the real design decisions, and they should become ADRs before any code:
 
 1. **Zero-dependency vs. crypto + embeddings + ANN.** We cannot hand-roll a cipher
    responsibly. Recommendation: allow a **bounded, vetted, pure-safe-Rust** dependency
-   set for the Engram crate only (RustCrypto for the cipher/KDF — all `#![forbid(unsafe)]`-
+   set for the Mnema crate only (RustCrypto for the cipher/KDF — all `#![forbid(unsafe)]`-
    compatible), behind a feature flag, and keep the *embedder pluggable* (bring-your-own,
    e.g. a local gguf/ONNX model) so the heavy ML dependency is the caller's choice, not
    ours. This preserves "green means proven" for *our* logic while not pretending we
@@ -226,7 +226,7 @@ the real design decisions, and they should become ADRs before any code:
 | **2** | Embeddings (pluggable) + HNSW + BM25 + hybrid retrieve + MMR assembly | fusion determinism, budget never exceeded |
 | **3** | Write intelligence: bloom+vec dedup, **contradiction resolution**, decay | "never both versions live"; dedup threshold |
 | **4** | Security hardening: injection-resistant retrieval contract, egress tiers, hard-delete/compaction | egress filter never leaks `private`; zero-byte purge |
-| **5** | `engram-mcp` server + a reference local-model integration | protocol contract |
+| **5** | `mnema-mcp` server + a reference local-model integration | protocol contract |
 
 Each phase ends only when `scripts/check.sh` is green (fmt · clippy · test · full
 ratchet · manifest) — same bar as the rest of the repo.

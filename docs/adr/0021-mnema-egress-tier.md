@@ -5,13 +5,13 @@ kind: decision
 status: accepted
 impact: high
 domain: security, privacy, memory-layer, local-first
-tags: egress, privacy, local-first, exfiltration, prompt-injection, redaction, engram, memory, threat-model, local-model
+tags: egress, privacy, local-first, exfiltration, prompt-injection, redaction, mnema, memory, threat-model, local-model
 relates_to: ADR-0020, BND-tested-not-correct, BND-statistical-quality
 supersedes:
 superseded_by:
 source_parts: 25
 decided: 2026-07
-summary: Tag every memory with an egress tier; the read-path assembly unconditionally drops a `private`-tier memory bound for a remote destination, making the local-first leak (local store, remote LLM) impossible by construction rather than by discipline. Shipped and ratchet-pinned in src/engram.rs.
+summary: Tag every memory with an egress tier; the read-path assembly unconditionally drops a `private`-tier memory bound for a remote destination, making the local-first leak (local store, remote LLM) impossible by construction rather than by discipline. Shipped and ratchet-pinned in src/mnema.rs.
 ---
 
 # ADR-0021 — Per-memory egress tier
@@ -42,7 +42,7 @@ worth that cost. The trade is **"provable non-egress" over "maximal recall for e
 query"**, chosen per-memory by the user, not globally by us.
 
 ## Noha-Fitness-Result — what did the probe say?
-**Shipped and pinned** (`src/engram.rs`). The deterministic invariant —
+**Shipped and pinned** (`src/mnema.rs`). The deterministic invariant —
 > *the egress filter never emits a `Private`-tier memory into a bundle whose destination
 > is `Remote`* — for all inputs, no exceptions
 is enforced in `assemble_bundle` and pinned by `private_content_never_reaches_a_remote_bundle`
@@ -61,10 +61,10 @@ filter; a path that bypasses it reverses this ADR. The tier is the user's lever;
 enforcement is not negotiable at runtime.
 
 ## Related
-- Narrative: `docs/SELF-EVOLUTION.md` Part 25 (the Engram subsystem)
+- Narrative: `docs/SELF-EVOLUTION.md` Part 25 (the Mnema subsystem)
 - ADR-0020 — the dependency budget of the layer this ships in.
 - BND-tested-not-correct — noha proves the filter is *pinned*; a human owns whether the
   tier *policy* is right.
 - BND-statistical-quality — why retrieval *quality* is channel-B, but this *contract* is
   ratchet-pinned.
-- `docs/proposals/engram-memory-layer.md` §2, §6c — the local-first tension this closes.
+- `docs/proposals/mnema-memory-layer.md` §2, §6c — the local-first tension this closes.

@@ -1,17 +1,17 @@
-# engram — documentation
+# mnema — documentation
 
 | File | What it is |
 |---|---|
 | [`DESIGN.md`](DESIGN.md) | The full design: architecture, the four memory types, the write/read paths, the threat model, and the phased build plan. Start here. |
 | [`NARRATIVE.md`](NARRATIVE.md) | The story of building the layer under a mutation ratchet — why it was the test, the invariants pinned, the teeth-gap moments. |
-| [`adr/0020-engram-dependency-budget.md`](adr/0020-engram-dependency-budget.md) | Why a small, vetted, safe-Rust crypto set is allowed behind an optional `secure` feature (the core stays zero-dependency). |
-| [`adr/0021-engram-egress-tier.md`](adr/0021-engram-egress-tier.md) | The per-memory egress tier — how a `Private` memory is made *structurally* unable to reach a remote model. |
+| [`adr/0020-mnema-dependency-budget.md`](adr/0020-mnema-dependency-budget.md) | Why a small, vetted, safe-Rust crypto set is allowed behind an optional `secure` feature (the core stays zero-dependency). |
+| [`adr/0021-mnema-egress-tier.md`](adr/0021-mnema-egress-tier.md) | The per-memory egress tier — how a `Private` memory is made *structurally* unable to reach a remote model. |
 | [`adr/0022-memory-augmented-self-evolution.md`](adr/0022-memory-augmented-self-evolution.md) | An example *consumer*: giving a self-evolving agent a memory of its own history. Included because it shows the layer used in anger. |
 | [`adr/0023-embedder-width-single-source.md`](adr/0023-embedder-width-single-source.md) | Why the default embedder's width is pinned as one library constant — a bug the ratchet structurally can't catch (recall-only drift between two binaries over a shared store). |
 
 ## A note on cross-references
 
-`engram` was extracted from the **emerge** research project, where it was built under the **noha**
+`mnema` was extracted from the **emerge** research project, where it was built under the **noha**
 mutation-coverage gate. The ADRs and narrative therefore cite records that live in *that* repository:
 
 - **`ADR-0007`**, **`ADR-0012`**, **`ADR-0006`**, **`ADR-0014`** — emerge decisions (the

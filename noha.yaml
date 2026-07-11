@@ -18,7 +18,7 @@ build: cargo test --features secure --no-run --quiet
 focus: cargo test --features secure --quiet {test}
 focus_kill_codes: 101
 sources:
-  # NOTE: src/bin/engram.rs is deliberately NOT probed — it is I/O orchestration
+  # NOTE: src/bin/mnema.rs is deliberately NOT probed — it is I/O orchestration
   # *below noha's behavioral waterline* (see its module doc; the same rule that excludes
   # scripts/evolve.sh). Every real decision lives in the ratchet-pinned library below.
   - src/embed.rs

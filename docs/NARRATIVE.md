@@ -1,20 +1,20 @@
-## Part 25 — Engram: building a memory layer under the same discipline (July 2026)
+## Part 25 — Mnema: building a memory layer under the same discipline (July 2026)
 
 Parts 6–24 evolved a *substrate* (a cache, a counter, a Bloom filter) to prove the loop. Part 25 asks a
 different question: does "green means proven" hold up when you build a **real product** — a fast,
 secure, local-first memory layer for LLMs — from commit one? The proposal lives in
-`docs/proposals/engram-memory-layer.md`; the code is the `engram` module. The bet was that the two
+`docs/proposals/mnema-memory-layer.md`; the code is the `mnema` module. The bet was that the two
 things every memory layer gets wrong — **letting contradictory facts both survive**, and **letting a
 stored "memory" become an instruction** (prompt injection via retrieval) — are exactly the kind of
 *deterministic invariant* noha's ratchet pins best, and so could be made *provable* rather than merely
 asserted. They were.
 
-**Two decisions had to be paid for out loud.** [`ADR-0020`](evolution/adr/0020-engram-dependency-budget.md)
+**Two decisions had to be paid for out loud.** [`ADR-0020`](evolution/adr/0020-mnema-dependency-budget.md)
 partially reverses the zero-dependency wall ([`ADR-0007`](evolution/adr/0007-forbid-unsafe-concurrency-wall.md)):
 a cipher cannot be responsibly hand-rolled, so a small, enumerated, safe-Rust crypto set (`chacha20poly1305`,
 `argon2`, `getrandom`) is allowed — but *only* behind an optional `secure` feature, so the evolution
 substrate and benches stay zero-dependency by default, and the full gate probes the gated code via
-`--all-features`. The `unsafe` ban is retained in full. [`ADR-0021`](evolution/adr/0021-engram-egress-tier.md)
+`--all-features`. The `unsafe` ban is retained in full. [`ADR-0021`](evolution/adr/0021-mnema-egress-tier.md)
 makes the local-first leak (local store, remote LLM) *impossible by construction*: every memory carries an
 egress tier, and the read path unconditionally drops a `Private` memory bound for a `Remote` destination —
 the same "make the reward-hack uncompilable, don't just detect it" move as the concurrency wall, one layer up.
@@ -40,7 +40,7 @@ until a test observes the exact thing it changes.
 HNSW. An ANN index is faster but only *approximately* correct — its win is latency, which is **invisible to
 noha's behavioral ratchet** (BND-performance-blindness, the same wall as the memory-ordering one). So exact
 brute-force is the *correctness oracle* the ratchet pins, and its O(N) scan is measured on **channel B**
-(`benches/engram.rs`, `scripts/fitness-engram.sh`), with a planted nearest neighbour as the behavioral pin.
+(`benches/mnema.rs`, `scripts/fitness-mnema.sh`), with a planted nearest neighbour as the behavioral pin.
 That bench is exactly where an approximate index has to prove itself — and one now does: an inverted-file
 `IvfIndex` that scans only the query's nearest buckets. It is **ratchet-pinned to equal the exact oracle at
 full probe** (a mutant that drops a bucket or mis-assigns a vector breaks that equality), while its recall is

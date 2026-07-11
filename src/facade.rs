@@ -1,4 +1,4 @@
-//! The `Engram` facade — Phase-2 slice C (`docs/proposals/engram-memory-layer.md`).
+//! The `Mnema` facade — Phase-2 slice C (`docs/proposals/mnema-memory-layer.md`).
 //! One object that turns the proven parts into a usable memory layer: an encrypted
 //! episodic store (slice 2), a contradiction-resolving semantic store (slice 3), an
 //! exact vector index (slice 2a), and hybrid retrieval (slice 2b), coordinated behind
@@ -26,33 +26,33 @@ use crate::{BundleItem, Destination, EgressTier, Memory, MemoryId, MemoryKind};
 const WORKING_HORIZON: u64 = 32;
 /// Default scratchpad capacity: at most this many notes at once.
 const WORKING_CAPACITY: usize = 16;
-/// Lloyd iterations for [`build_ann`](Engram::build_ann)'s k-means anchor training — enough to
+/// Lloyd iterations for [`build_ann`](Mnema::build_ann)'s k-means anchor training — enough to
 /// settle the centroids on typical corpora; bounded so building the index stays fast and O(1) in
 /// rounds regardless of corpus size.
 const ANN_KMEANS_ITERS: usize = 10;
 
 /// A batteries-included local-first memory layer over a pluggable [`Embedder`].
-pub struct Engram<E: Embedder> {
+pub struct Mnema<E: Embedder> {
     episodic: EpisodicLog,
     index: VectorIndex,
     /// An optional approximate index for fast recall, built on demand by [`build_ann`].
     /// The exact `index` remains the source of truth and the default recall path.
     ///
-    /// [`build_ann`]: Engram::build_ann
+    /// [`build_ann`]: Mnema::build_ann
     ann: Option<IvfIndex>,
     semantic: SemanticStore,
     working: WorkingMemory,
     embedder: E,
     clock: u64,
-    /// The derived sealing key, cached after the first [`seal`](Engram::seal) or [`open`]
-    /// (Engram::open) so repeated seals reuse it instead of re-running the memory-hard Argon2id
+    /// The derived sealing key, cached after the first [`seal`](Mnema::seal) or [`open`]
+    /// (Mnema::open) so repeated seals reuse it instead of re-running the memory-hard Argon2id
     /// KDF on every write. `None` until the store is first sealed or opened.
     ///
-    /// [`open`]: Engram::open
+    /// [`open`]: Mnema::open
     seal_key: Option<SealingKey>,
 }
 
-impl<E: Embedder> Engram<E> {
+impl<E: Embedder> Mnema<E> {
     /// A new, empty memory over `embedder` (whose `dims()` fixes the index width).
     pub fn new(embedder: E) -> Self {
         let dims = embedder.dims();
@@ -81,7 +81,7 @@ impl<E: Embedder> Engram<E> {
     }
 
     /// Store an episodic memory with an explicit `importance` (see [`Memory::importance`]),
-    /// which lifts it against the forgetting curve in [`recall_decayed`](Engram::recall_decayed).
+    /// which lifts it against the forgetting curve in [`recall_decayed`](Mnema::recall_decayed).
     pub fn remember_important(
         &mut self,
         tier: EgressTier,
@@ -101,7 +101,7 @@ impl<E: Embedder> Engram<E> {
 
     /// Store a `Redacted`-tier episodic memory: `content` is kept locally, but a `Remote`
     /// bundle emits `redacted` in its place (the egress filter's `Redact` decision). This is
-    /// the only way to attach a real redacted surface — [`remember`](Engram::remember) leaves
+    /// the only way to attach a real redacted surface — [`remember`](Mnema::remember) leaves
     /// it empty, so a `Redacted` memory made that way would emit nothing remotely.
     pub fn remember_redacted(&mut self, content: &str, redacted: &str) -> MemoryId {
         let at = self.tick();
@@ -124,7 +124,7 @@ impl<E: Embedder> Engram<E> {
     }
 
     /// Assert a semantic fact with an explicit egress `tier` — a `Private` belief is stored
-    /// but never returned to a `Remote` destination (see [`belief_for`](Engram::belief_for)).
+    /// but never returned to a `Remote` destination (see [`belief_for`](Mnema::belief_for)).
     pub fn remember_fact_tiered(
         &mut self,
         subject: &str,
@@ -133,12 +133,13 @@ impl<E: Embedder> Engram<E> {
         tier: EgressTier,
     ) -> Resolution {
         let at = self.tick();
-        self.semantic.assert_tiered(subject, attribute, value, at, tier)
+        self.semantic
+            .assert_tiered(subject, attribute, value, at, tier)
     }
 
     /// The current belief for a `(subject, attribute)` key, if any — the **unfiltered**
     /// read. This can return a `Private` belief; never hand its `value` to a remote model.
-    /// Use [`belief_for`](Engram::belief_for) when assembling a prompt for a destination.
+    /// Use [`belief_for`](Mnema::belief_for) when assembling a prompt for a destination.
     pub fn belief(&self, subject: &str, attribute: &str) -> Option<&Fact> {
         self.semantic.current(subject, attribute)
     }
@@ -146,18 +147,13 @@ impl<E: Embedder> Engram<E> {
     /// The current belief for a key **as visible to `dest`**: a belief the egress filter
     /// would deny (a `Private`, or a `Redacted` bound `Remote`) is withheld — this returns
     /// `None`, exactly as if it did not exist, so a `Remote` model can never read it out.
-    pub fn belief_for(
-        &self,
-        subject: &str,
-        attribute: &str,
-        dest: Destination,
-    ) -> Option<&Fact> {
+    pub fn belief_for(&self, subject: &str, attribute: &str, dest: Destination) -> Option<&Fact> {
         self.semantic.current_for(subject, attribute, dest)
     }
 
     /// Hard-delete every semantic fact matching `predicate` (live or superseded), returning
     /// how many were removed — the right-to-be-forgotten path for beliefs, alongside
-    /// [`forget`](Engram::forget) for episodic memories.
+    /// [`forget`](Mnema::forget) for episodic memories.
     pub fn forget_facts(&mut self, predicate: impl FnMut(&Fact) -> bool) -> usize {
         self.semantic.forget(predicate)
     }
@@ -184,7 +180,7 @@ impl<E: Embedder> Engram<E> {
         )
     }
 
-    /// Like [`recall`](Engram::recall), but with explicit per-retriever fusion `weights` — e.g.
+    /// Like [`recall`](Mnema::recall), but with explicit per-retriever fusion `weights` — e.g.
     /// [`RetrievalWeights::semantic`] to let a real embedding model's meaning-match outvote a
     /// memory that merely shares a keyword or is more recent. With the default lexical embedder
     /// the dense signal is weak, so weighting it up there hurts more than it helps.
@@ -209,12 +205,12 @@ impl<E: Embedder> Engram<E> {
         )
     }
 
-    /// Like [`recall`](Engram::recall), but applies the forgetting curve (proposal §3.2):
+    /// Like [`recall`](Mnema::recall), but applies the forgetting curve (proposal §3.2):
     /// each hit's score is scaled by its `importance` and a recency weight that halves
     /// every `half_life` ticks, using the facade's own clock as *now*. Recent, important
     /// memories are preferred over stale ones. Note a `half_life` of `0` disables the
     /// *recency decay* (the weight is `1.0`) but **still applies `importance` weighting**,
-    /// so it is not identical to [`recall`](Engram::recall), which applies no scaling at all.
+    /// so it is not identical to [`recall`](Mnema::recall), which applies no scaling at all.
     pub fn recall_decayed(
         &self,
         query: &str,
@@ -240,7 +236,7 @@ impl<E: Embedder> Engram<E> {
     }
 
     /// Build the approximate (IVF) index over the current corpus, enabling
-    /// [`recall_fast`](Engram::recall_fast). `num_anchors` buckets are seeded by
+    /// [`recall_fast`](Mnema::recall_fast). `num_anchors` buckets are seeded by
     /// **deterministic k-means** over the corpus embeddings ([`kmeans_anchors`]), so the
     /// anchors sit at the data's real cluster centres and the IVF recovers far more of the
     /// exact top-k than arbitrarily-seeded anchors would; every memory is then bucketed. Call
@@ -264,7 +260,7 @@ impl<E: Embedder> Engram<E> {
         self.ann = Some(ann);
     }
 
-    /// Like [`recall`](Engram::recall), but sources the dense retriever from the
+    /// Like [`recall`](Mnema::recall), but sources the dense retriever from the
     /// approximate index (scanning `probe` buckets) when one has been built with
     /// [`build_ann`] — trading recall for speed. Without a built index it falls back to
     /// the exact path, so the result is always egress-safe and never worse than exact.
@@ -309,7 +305,7 @@ impl<E: Embedder> Engram<E> {
     /// This does **not** apply the egress filter. Never assemble a prompt for a `Remote`
     /// model from its results — that would leak `Private` memories, defeating the ADR-0021
     /// invariant. Use it only for local inspection/debugging, or use
-    /// [`recall_recent`](Engram::recall_recent) to get an egress-safe, budget-bounded bundle.
+    /// [`recall_recent`](Mnema::recall_recent) to get an egress-safe, budget-bounded bundle.
     pub fn recall_by_recency(&self, k: usize) -> Vec<&Memory> {
         let mut ordered: Vec<&Memory> = self.episodic.events().iter().collect();
         ordered.sort_by_key(|b| std::cmp::Reverse(b.at));
@@ -318,14 +314,10 @@ impl<E: Embedder> Engram<E> {
     }
 
     /// The most-recent memories as an **egress-safe** bundle for `dest`, newest first,
-    /// bounded to `char_budget` characters. Unlike [`recall_by_recency`](Engram::recall_by_recency)
-    /// this routes through the same choke point as [`recall`](Engram::recall), so a `Private`
+    /// bounded to `char_budget` characters. Unlike [`recall_by_recency`](Mnema::recall_by_recency)
+    /// this routes through the same choke point as [`recall`](Mnema::recall), so a `Private`
     /// memory's content never reaches a `Remote` bundle.
-    pub fn recall_recent(
-        &self,
-        dest: Destination,
-        char_budget: usize,
-    ) -> Vec<BundleItem> {
+    pub fn recall_recent(&self, dest: Destination, char_budget: usize) -> Vec<BundleItem> {
         crate::assemble_bundle(self.episodic.events(), dest, char_budget)
     }
 
@@ -359,9 +351,9 @@ impl<E: Embedder> Engram<E> {
     /// is *derived* (rebuildable by re-embedding), so it is not stored; [`open`]
     /// reconstructs it. Sealing routes through the same AEAD as the raw store.
     ///
-    /// [`open`]: Engram::open
+    /// [`open`]: Mnema::open
     /// The passphrase is used to derive the sealing key **once** — on the first seal (or at
-    /// [`open`](Engram::open)); later seals reuse the cached key with a fresh nonce, so a store
+    /// [`open`](Mnema::open)); later seals reuse the cached key with a fresh nonce, so a store
     /// that persists on every write pays the memory-hard Argon2id cost once, not per write. (The
     /// cached key stays with this store's original passphrase; to change it, re-seal a freshly
     /// opened store rather than passing a different passphrase here.)
@@ -371,8 +363,11 @@ impl<E: Embedder> Engram<E> {
         put_bytes(&mut plain, &self.episodic.encode());
         put_bytes(&mut plain, &encode_facts(self.semantic.facts()));
         // Reuse the cached key only if it was derived from THIS passphrase; a new passphrase
-        // (e.g. `engram rekey`) re-derives with a fresh salt.
-        let reuse = self.seal_key.as_ref().is_some_and(|sk| sk.matches(passphrase));
+        // (e.g. `mnema rekey`) re-derives with a fresh salt.
+        let reuse = self
+            .seal_key
+            .as_ref()
+            .is_some_and(|sk| sk.matches(passphrase));
         if !reuse {
             self.seal_key = Some(SealingKey::derive(passphrase)?);
         }
@@ -382,7 +377,7 @@ impl<E: Embedder> Engram<E> {
             .seal(&plain)
     }
 
-    /// Recover a whole memory from a [`seal`](Engram::seal)ed blob with `passphrase` and
+    /// Recover a whole memory from a [`seal`](Mnema::seal)ed blob with `passphrase` and
     /// an `embedder` (whose `dims()` must match the one that sealed it). The episodic log,
     /// beliefs, and clock are restored verbatim; the vector index is rebuilt by
     /// re-embedding every event, so recall resumes immediately. A wrong key or tampering
@@ -420,7 +415,7 @@ impl<E: Embedder> Engram<E> {
 
     /// Write to the ephemeral scratchpad (working memory): a short-lived note stamped
     /// at the current tick. Notes expire after [`WORKING_HORIZON`] ticks and are not
-    /// persisted by [`seal`](Engram::seal).
+    /// persisted by [`seal`](Mnema::seal).
     pub fn scratch(&mut self, content: &str) {
         let at = self.tick();
         self.working.note(at, content);
@@ -529,7 +524,7 @@ mod tests {
 
     #[test]
     fn remember_assigns_ids_and_counts_both_stores() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         assert_eq!(e.remember(EgressTier::Open, "the cat sat"), 0);
         assert_eq!(e.remember(EgressTier::Open, "the dog ran"), 1);
         assert_eq!(e.len(), 2);
@@ -539,7 +534,7 @@ mod tests {
 
     #[test]
     fn recall_surfaces_the_keyword_match_first() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Open, "the cat sat"); // id 0
         e.remember(EgressTier::Open, "the dog ran"); // id 1
         let bundle = e.recall("dog", Destination::Local, 10, 1_000);
@@ -549,7 +544,7 @@ mod tests {
 
     #[test]
     fn recall_respects_egress() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Private, "the secret dog plan"); // id 0
         e.remember(EgressTier::Open, "a public cat note"); // id 1
         let remote = e.recall("dog", Destination::Remote, 10, 1_000);
@@ -560,7 +555,7 @@ mod tests {
 
     #[test]
     fn forget_removes_from_both_recall_and_index() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Open, "the cat sat"); // 0
         e.remember(EgressTier::Open, "the dog ran"); // 1
         e.remember(EgressTier::Open, "the bird flew"); // 2
@@ -575,7 +570,7 @@ mod tests {
 
     #[test]
     fn newer_memories_are_more_recent() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         let a = e.remember(EgressTier::Open, "alpha");
         let b = e.remember(EgressTier::Open, "bravo");
         let recent = e.recall_by_recency(2);
@@ -586,7 +581,7 @@ mod tests {
 
     #[test]
     fn facts_resolve_contradictions_and_belief_reads_the_current_one() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         assert_eq!(
             e.remember_fact("alice", "diet", "vegetarian"),
             Resolution::Inserted
@@ -603,7 +598,7 @@ mod tests {
 
     #[test]
     fn the_scratchpad_holds_ephemeral_notes_newest_first() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.scratch("first thought");
         e.scratch("second thought");
         let pad: Vec<&str> = e.scratchpad().iter().map(|n| n.content.as_str()).collect();
@@ -614,7 +609,7 @@ mod tests {
 
     #[test]
     fn recall_fast_falls_back_to_exact_without_a_built_index() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Open, "the cat sat");
         e.remember(EgressTier::Open, "the dog ran");
         // No ANN built → recall_fast must equal the exact recall, bundle for bundle.
@@ -625,7 +620,7 @@ mod tests {
 
     #[test]
     fn recall_fast_at_full_probe_matches_exact_recall() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Private, "the secret dog plan");
         e.remember(EgressTier::Open, "a public cat note");
         e.build_ann(2);
@@ -639,7 +634,7 @@ mod tests {
 
     #[test]
     fn recall_decayed_prefers_the_recent_memory() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Open, "alpha beta"); // id 0, at 1 (old)
         e.remember(EgressTier::Open, "alpha beta"); // id 1, at 2 (recent)
         // Same content → symmetric base scores; a short half-life lets recency decide.
@@ -649,7 +644,7 @@ mod tests {
 
     #[test]
     fn remember_important_resists_the_forgetting_curve() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember_important(EgressTier::Open, 10.0, "alpha beta"); // id 0, older but salient
         e.remember(EgressTier::Open, "alpha beta"); // id 1, newer but neutral
         // A long half-life makes decay negligible, so 10× importance keeps the older,
@@ -658,8 +653,8 @@ mod tests {
         assert_eq!(bundle[0].id, 0);
     }
 
-    fn populated() -> Engram<VowelEmbedder> {
-        let mut e = Engram::new(VowelEmbedder);
+    fn populated() -> Mnema<VowelEmbedder> {
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Open, "the cat sat"); // id 0
         e.remember(EgressTier::Private, "the secret dog plan"); // id 1
         e.remember_fact("alice", "diet", "vegetarian"); // superseded ↓
@@ -670,7 +665,7 @@ mod tests {
     #[test]
     fn seal_then_open_restores_memories_beliefs_index_and_clock() {
         let sealed = populated().seal(b"key").unwrap();
-        let mut reopened = Engram::open(&sealed, b"key", VowelEmbedder).unwrap();
+        let mut reopened = Mnema::open(&sealed, b"key", VowelEmbedder).unwrap();
 
         // Episodic memories and the (rebuilt) index survive.
         assert_eq!(reopened.len(), 2);
@@ -706,7 +701,7 @@ mod tests {
     fn opening_with_the_wrong_passphrase_fails() {
         let sealed = populated().seal(b"right").unwrap();
         assert_eq!(
-            Engram::open(&sealed, b"wrong", VowelEmbedder).err(),
+            Mnema::open(&sealed, b"wrong", VowelEmbedder).err(),
             Some(StoreError::Decrypt)
         );
     }
@@ -714,7 +709,7 @@ mod tests {
     #[test]
     fn opening_a_truncated_blob_fails() {
         assert_eq!(
-            Engram::open(&[0u8; 8], b"key", VowelEmbedder).err(),
+            Mnema::open(&[0u8; 8], b"key", VowelEmbedder).err(),
             Some(StoreError::Truncated)
         );
     }
@@ -724,29 +719,29 @@ mod tests {
         // Past the salt (16) but short of salt+nonce (40): SealingKey::open's own bounds check
         // returns Truncated (a `<`→`false` mutant would proceed and mis-report).
         assert_eq!(
-            Engram::open(&[0u8; 20], b"key", VowelEmbedder).err(),
+            Mnema::open(&[0u8; 20], b"key", VowelEmbedder).err(),
             Some(StoreError::Truncated)
         );
         // Exactly 40 bytes IS a full header, so control reaches the AEAD, which rejects the empty
         // ciphertext → Decrypt. Pins the `<` boundary (not `<=`).
         assert_eq!(
-            Engram::open(&[0u8; 40], b"key", VowelEmbedder).err(),
+            Mnema::open(&[0u8; 40], b"key", VowelEmbedder).err(),
             Some(StoreError::Decrypt)
         );
     }
 
     #[test]
     fn resealing_with_a_new_passphrase_rekeys_the_store() {
-        // The cached sealing key must NOT be reused when the passphrase changes (the `engram
+        // The cached sealing key must NOT be reused when the passphrase changes (the `mnema
         // rekey` path): re-sealing under a new passphrase re-derives, so the result opens with the
         // NEW passphrase and no longer with the old one. A `==`→`!=` mutant in `matches` would
         // reuse the old key and this would fail.
         let sealed = populated().seal(b"old").unwrap();
-        let mut mem = Engram::open(&sealed, b"old", VowelEmbedder).unwrap();
+        let mut mem = Mnema::open(&sealed, b"old", VowelEmbedder).unwrap();
         let resealed = mem.seal(b"new").unwrap();
-        assert!(Engram::open(&resealed, b"new", VowelEmbedder).is_ok());
+        assert!(Mnema::open(&resealed, b"new", VowelEmbedder).is_ok());
         assert_eq!(
-            Engram::open(&resealed, b"old", VowelEmbedder).err(),
+            Mnema::open(&resealed, b"old", VowelEmbedder).err(),
             Some(StoreError::Decrypt)
         );
     }
@@ -758,9 +753,12 @@ mod tests {
         let mut mem = populated();
         let first = mem.seal(b"pw").unwrap();
         let second = mem.seal(b"pw").unwrap();
-        assert!(Engram::open(&first, b"pw", VowelEmbedder).is_ok());
-        assert!(Engram::open(&second, b"pw", VowelEmbedder).is_ok());
-        assert_ne!(first, second, "a fresh nonce per seal makes the ciphertext differ");
+        assert!(Mnema::open(&first, b"pw", VowelEmbedder).is_ok());
+        assert!(Mnema::open(&second, b"pw", VowelEmbedder).is_ok());
+        assert_ne!(
+            first, second,
+            "a fresh nonce per seal makes the ciphertext differ"
+        );
         // The cached key is REUSED (no re-derivation), so its salt — the first 16 bytes — is the
         // same across both seals. If the seal always re-derived, each would draw a fresh salt.
         assert_eq!(first[..16], second[..16], "reused key keeps the same salt");
@@ -768,7 +766,7 @@ mod tests {
 
     #[test]
     fn a_redacted_memory_emits_its_surface_remotely_and_full_content_locally() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember_redacted("card 4111 1111 1111 1111", "card [redacted]");
         // Remote sees the surface, never the full content...
         let remote = e.recall_recent(Destination::Remote, 1_000);
@@ -782,29 +780,39 @@ mod tests {
 
     #[test]
     fn a_redacted_surface_survives_seal_and_open() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember_redacted("secret detail", "surface");
         let sealed = e.seal(b"key").unwrap();
-        let reopened = Engram::open(&sealed, b"key", VowelEmbedder).unwrap();
-        assert_eq!(reopened.recall_recent(Destination::Remote, 1_000)[0].text, "surface");
+        let reopened = Mnema::open(&sealed, b"key", VowelEmbedder).unwrap();
+        assert_eq!(
+            reopened.recall_recent(Destination::Remote, 1_000)[0].text,
+            "surface"
+        );
     }
 
     #[test]
     fn a_private_belief_is_withheld_from_a_remote_read() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember_fact_tiered("user", "api_key", "sk-live-123", EgressTier::Private);
         // The unfiltered read sees it; the Remote-facing read must not; Local may.
-        assert_eq!(e.belief("user", "api_key").map(|f| f.value.as_str()), Some("sk-live-123"));
-        assert!(e.belief_for("user", "api_key", Destination::Remote).is_none());
         assert_eq!(
-            e.belief_for("user", "api_key", Destination::Local).map(|f| f.value.as_str()),
+            e.belief("user", "api_key").map(|f| f.value.as_str()),
+            Some("sk-live-123")
+        );
+        assert!(
+            e.belief_for("user", "api_key", Destination::Remote)
+                .is_none()
+        );
+        assert_eq!(
+            e.belief_for("user", "api_key", Destination::Local)
+                .map(|f| f.value.as_str()),
             Some("sk-live-123")
         );
     }
 
     #[test]
     fn forget_facts_hard_deletes_matching_beliefs() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember_fact("server", "token", "abc123");
         e.remember_fact("user", "city", "utrecht");
         let purged = e.forget_facts(|f| f.value.contains("abc"));
@@ -815,11 +823,15 @@ mod tests {
 
     #[test]
     fn recall_recent_is_egress_safe_unlike_recall_by_recency() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember(EgressTier::Private, "the secret plan"); // id 0
         e.remember(EgressTier::Open, "a public note"); // id 1
         // The raw view leaks the private content...
-        assert!(e.recall_by_recency(2).iter().any(|m| m.content == "the secret plan"));
+        assert!(
+            e.recall_by_recency(2)
+                .iter()
+                .any(|m| m.content == "the secret plan")
+        );
         // ...but the egress-safe recent bundle drops it for a Remote destination.
         let bundle = e.recall_recent(Destination::Remote, 1_000);
         assert!(bundle.iter().all(|b| !b.text.contains("secret")));
@@ -828,16 +840,20 @@ mod tests {
 
     #[test]
     fn seal_then_open_preserves_a_private_belief_tier() {
-        let mut e = Engram::new(VowelEmbedder);
+        let mut e = Mnema::new(VowelEmbedder);
         e.remember_fact_tiered("user", "api_key", "sk-live-xyz", EgressTier::Private);
         let sealed = e.seal(b"key").unwrap();
-        let reopened = Engram::open(&sealed, b"key", VowelEmbedder).unwrap();
+        let reopened = Mnema::open(&sealed, b"key", VowelEmbedder).unwrap();
         // The tier byte round-trips: the restored belief is still Private, still withheld
         // from a Remote read (a dropped/mis-decoded tier would leak it).
         assert_eq!(
             reopened.belief("user", "api_key").map(|f| f.tier),
             Some(EgressTier::Private)
         );
-        assert!(reopened.belief_for("user", "api_key", Destination::Remote).is_none());
+        assert!(
+            reopened
+                .belief_for("user", "api_key", Destination::Remote)
+                .is_none()
+        );
     }
 }

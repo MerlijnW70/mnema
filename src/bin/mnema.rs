@@ -1,4 +1,4 @@
-//! `engram` — a tiny CLI over the memory layer, so non-Rust callers (notably the
+//! `mnema` — a tiny CLI over the memory layer, so non-Rust callers (notably the
 //! evolution loop, `scripts/evolve.sh`) can remember and recall across runs.
 //!
 //! Deliberately thin: every real decision lives in the ratchet-pinned facade; this only
@@ -7,34 +7,34 @@
 //! not part of the probed `sources`. The store is one sealed blob (ADR-0020 crypto).
 //!
 //! The key is per-store, resolved in this order (never on the command line):
-//!   1. `$ENGRAM_KEY` if set — an explicit passphrase (shared stores, CI, env-only secrets);
+//!   1. `$MNEMA_KEY` if set — an explicit passphrase (shared stores, CI, env-only secrets);
 //!   2. else a random 32-byte key in the sidecar `<store>.key`, generated on first use.
 //!
 //! There is no shared default: each store gets its own independent key. To migrate a store
-//! that was sealed under an old passphrase, `engram rekey <store>` (with `$ENGRAM_KEY` set
+//! that was sealed under an old passphrase, `mnema rekey <store>` (with `$MNEMA_KEY` set
 //! to the old passphrase) re-seals it under a fresh keyfile.
 //!
 //! Usage:
-//!   engram remember <store> <open|redacted|private> <content>   # prints the new id
-//!   engram fact     <store> <subject> <attribute> <value>       # prints the resolution
-//!   engram recall   <store> <k> <query>                         # prints k memories
-//!   engram stats    <store>
-//!   engram rekey    <store>   # $ENGRAM_KEY = old passphrase; re-seals under a new keyfile
+//!   mnema remember <store> <open|redacted|private> <content>   # prints the new id
+//!   mnema fact     <store> <subject> <attribute> <value>       # prints the resolution
+//!   mnema recall   <store> <k> <query>                         # prints k memories
+//!   mnema stats    <store>
+//!   mnema rekey    <store>   # $MNEMA_KEY = old passphrase; re-seals under a new keyfile
 
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
-use engram::embed::HashEmbedder;
-use engram::facade::Engram;
-use engram::{Destination, EgressTier};
+use mnema::embed::HashEmbedder;
+use mnema::facade::Mnema;
+use mnema::{Destination, EgressTier};
 
 /// The default embedder's width, pinned once in the library so this CLI and the
-/// `engram-mcp` server — which share a store family — can never embed at different
+/// `mnema-mcp` server — which share a store family — can never embed at different
 /// widths and corrupt each other's recall.
 const DIMS: usize = HashEmbedder::DEFAULT_DIMS;
 
 fn die(msg: &str) -> ! {
-    eprintln!("engram: {msg}");
+    eprintln!("mnema: {msg}");
     exit(1);
 }
 
@@ -62,51 +62,56 @@ fn generate_keyfile(path: &Path) -> Vec<u8> {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    std::fs::write(path, k).unwrap_or_else(|e| die(&format!("write keyfile {}: {e}", path.display())));
+    std::fs::write(path, k)
+        .unwrap_or_else(|e| die(&format!("write keyfile {}: {e}", path.display())));
     restrict_perms(path);
     k.to_vec()
 }
 
-/// The per-store key: `$ENGRAM_KEY` if set, else the sidecar keyfile. A keyfile is generated
+/// The per-store key: `$MNEMA_KEY` if set, else the sidecar keyfile. A keyfile is generated
 /// only for a store that does not yet exist — never for an existing store missing its key
 /// (that is a migration, handled by `rekey`), so we can't silently lock the data away.
 fn resolve_key(store: &Path) -> Vec<u8> {
-    if let Ok(k) = std::env::var("ENGRAM_KEY")
-        && !k.is_empty() {
-            return k.into_bytes();
-        }
+    if let Ok(k) = std::env::var("MNEMA_KEY")
+        && !k.is_empty()
+    {
+        return k.into_bytes();
+    }
     let keyfile = keyfile_path(store);
     match std::fs::read(&keyfile) {
         Ok(b) if b.len() == 32 => b,
-        Ok(_) => die(&format!("keyfile {} is malformed (expected 32 bytes)", keyfile.display())),
-        Err(_) if store.exists() => die(
-            "store exists but has no keyfile and $ENGRAM_KEY is unset — \
-             set $ENGRAM_KEY to the old passphrase and run `engram rekey <store>` to migrate",
-        ),
+        Ok(_) => die(&format!(
+            "keyfile {} is malformed (expected 32 bytes)",
+            keyfile.display()
+        )),
+        Err(_) if store.exists() => {
+            die("store exists but has no keyfile and $MNEMA_KEY is unset — \
+             set $MNEMA_KEY to the old passphrase and run `mnema rekey <store>` to migrate")
+        }
         Err(_) => generate_keyfile(&keyfile),
     }
 }
 
-fn load(store: &str) -> Engram<HashEmbedder> {
+fn load(store: &str) -> Mnema<HashEmbedder> {
     let embedder = HashEmbedder::new(DIMS);
     let path = Path::new(store);
     if path.exists() {
         let bytes = std::fs::read(store).unwrap_or_else(|e| die(&format!("read {store}: {e}")));
-        Engram::open(&bytes, &resolve_key(path), embedder)
+        Mnema::open(&bytes, &resolve_key(path), embedder)
             .unwrap_or_else(|_| die("cannot open store (wrong key or corrupt)"))
     } else {
-        Engram::new(embedder)
+        Mnema::new(embedder)
     }
 }
 
-fn save(store: &str, mem: &mut Engram<HashEmbedder>) {
+fn save(store: &str, mem: &mut Mnema<HashEmbedder>) {
     let blob = mem
         .seal(&resolve_key(Path::new(store)))
         .unwrap_or_else(|_| die("seal failed"));
     std::fs::write(store, blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
 }
 
-/// Migrate a store to a per-store keyfile: open it with the current `$ENGRAM_KEY`, then
+/// Migrate a store to a per-store keyfile: open it with the current `$MNEMA_KEY`, then
 /// re-seal it under a freshly generated `<store>.key`. Refuses to clobber an existing
 /// keyfile, so it is safe to run at most once per store.
 fn rekey(store: &str) {
@@ -114,19 +119,24 @@ fn rekey(store: &str) {
     if !path.exists() {
         die(&format!("rekey: store {store} does not exist"));
     }
-    let old = match std::env::var("ENGRAM_KEY") {
+    let old = match std::env::var("MNEMA_KEY") {
         Ok(k) if !k.is_empty() => k.into_bytes(),
-        _ => die("rekey: set $ENGRAM_KEY to the store's CURRENT passphrase"),
+        _ => die("rekey: set $MNEMA_KEY to the store's CURRENT passphrase"),
     };
     let keyfile = keyfile_path(path);
     if keyfile.exists() {
-        die(&format!("rekey: {} already exists; refusing to overwrite", keyfile.display()));
+        die(&format!(
+            "rekey: {} already exists; refusing to overwrite",
+            keyfile.display()
+        ));
     }
     let bytes = std::fs::read(store).unwrap_or_else(|e| die(&format!("read {store}: {e}")));
-    let mut mem = Engram::open(&bytes, &old, HashEmbedder::new(DIMS))
-        .unwrap_or_else(|_| die("rekey: cannot open store with $ENGRAM_KEY (wrong passphrase?)"));
+    let mut mem = Mnema::open(&bytes, &old, HashEmbedder::new(DIMS))
+        .unwrap_or_else(|_| die("rekey: cannot open store with $MNEMA_KEY (wrong passphrase?)"));
     let new_key = generate_keyfile(&keyfile);
-    let blob = mem.seal(&new_key).unwrap_or_else(|_| die("rekey: seal failed"));
+    let blob = mem
+        .seal(&new_key)
+        .unwrap_or_else(|_| die("rekey: seal failed"));
     std::fs::write(store, blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
     println!("rekeyed {store} under {}", keyfile.display());
 }
@@ -173,6 +183,8 @@ fn main() {
             println!("memories: {}  indexed: {}", mem.len(), mem.indexed());
         }
         ("rekey", 2) => rekey(&args[1]),
-        _ => die("usage: engram remember|recall|fact|stats|rekey <store> ...  (see the source header)"),
+        _ => die(
+            "usage: mnema remember|recall|fact|stats|rekey <store> ...  (see the source header)",
+        ),
     }
 }
