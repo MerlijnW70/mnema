@@ -82,3 +82,14 @@ harness = false
 [[bench]]
 name = "persist"
 harness = false
+
+# Public recall benchmark: retrieval R@k on the LoCoMo long-conversation dataset.
+# Download data/locomo10.json from github.com/snap-research/locomo, set LOCOMO_PATH, then:
+#   LOCOMO_PATH=locomo10.json cargo bench --bench locomo --features secure,local-embed
+[[bench]]
+name = "locomo"
+harness = false
+
+[dev-dependencies]
+# Parse the LoCoMo dataset JSON in the locomo bench (dev-only; not a crate dependency).
+serde_json = "1"
