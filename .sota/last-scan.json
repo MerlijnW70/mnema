@@ -27,7 +27,7 @@
     { "id": "forgetting-decay", "us": "met", "tier": "table-stakes" },
     { "id": "encryption-at-rest", "us": "met", "tier": "table-stakes" },
     { "id": "incremental-persistence", "us": "missing", "tier": "table-stakes", "note": "DELIBERATE design trade-off (ADR-0024), not a deficiency: engram re-encrypts the whole store per write so `forget` is a TRUE immediate physical delete — an append-only log defers physical deletion to compaction. With the Argon2id key cached, the whole-store write is cheap at scale (measured: ~1ms at 10k, ~11ms at 100k; benches/persist.rs). Peers' SQLite/WAL writes are incremental but do not physically delete in place. Revisit if save latency at a realistic N becomes a problem, or the hard-delete guarantee is relaxed." },
-    { "id": "standard-recall-benchmark", "us": "met", "tier": "table-stakes", "was": "missing", "evidence": "benches/recall.rs (R@k harness, cited numbers) + benches/scale.rs" },
+    { "id": "standard-recall-benchmark", "us": "met", "tier": "table-stakes", "was": "missing", "evidence": "PUBLIC benchmark: LoCoMo retrieval (benches/locomo.rs + scripts/locomo.sh), full 10-conversation dataset, 1981 questions — semantic R@5 0.385 / R@10 0.453 vs lexical 0.225 / 0.323 (+16pt R@5). Plus benches/recall.rs (own paraphrase R@k) + benches/scale.rs." },
     { "id": "install-docs", "us": "met", "tier": "table-stakes" },
     { "id": "bitemporal-history", "us": "partial", "tier": "edge" },
     { "id": "language-sdks", "us": "partial", "tier": "edge" },
