@@ -359,6 +359,9 @@ impl<E: Embedder> Mnema<E> {
     /// opened store rather than passing a different passphrase here.)
     pub fn seal(&mut self, passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
         let mut plain = Vec::new();
+        // Record the embedder's vector width first, so `open` can refuse a mismatched embedder
+        // (ADR-0023) instead of silently rebuilding the index at the wrong width.
+        plain.extend_from_slice(&(self.embedder.dims() as u32).to_le_bytes());
         plain.extend_from_slice(&self.clock.to_le_bytes());
         put_bytes(&mut plain, &self.episodic.encode());
         put_bytes(&mut plain, &encode_facts(self.semantic.facts()));
@@ -377,9 +380,10 @@ impl<E: Embedder> Mnema<E> {
             .seal(&plain)
     }
 
-    /// Recover a whole memory from a [`seal`](Mnema::seal)ed blob with `passphrase` and
-    /// an `embedder` (whose `dims()` must match the one that sealed it). The episodic log,
-    /// beliefs, and clock are restored verbatim; the vector index is rebuilt by
+    /// Recover a whole memory from a [`seal`](Mnema::seal)ed blob with `passphrase` and an
+    /// `embedder` whose `dims()` **must** match the one that sealed it — a mismatch is refused
+    /// with [`StoreError::EmbedderWidthMismatch`], never silently applied (ADR-0023). The
+    /// episodic log, beliefs, and clock are restored verbatim; the vector index is rebuilt by
     /// re-embedding every event, so recall resumes immediately. A wrong key or tampering
     /// yields [`StoreError::Decrypt`].
     pub fn open(blob: &[u8], passphrase: &[u8], embedder: E) -> Result<Self, StoreError> {
@@ -387,7 +391,17 @@ impl<E: Embedder> Mnema<E> {
         // reopened store skip the Argon2id KDF.
         let seal_key = SealingKey::for_salt(passphrase, SealingKey::salt_of(blob)?)?;
         let plain = seal_key.open(blob)?;
-        let (clock, off) = take_u64(&plain, 0)?;
+        // Refuse an embedder whose width differs from the one that sealed the store — opening
+        // would rebuild the index at the wrong width and silently corrupt recall (ADR-0023).
+        let (stored_width, off) = take_u32(&plain, 0)?;
+        let embedder_width = embedder.dims() as u32;
+        if stored_width != embedder_width {
+            return Err(StoreError::EmbedderWidthMismatch {
+                stored: stored_width,
+                embedder: embedder_width,
+            });
+        }
+        let (clock, off) = take_u64(&plain, off)?;
         let (episodic_bytes, off) = take_bytes(&plain, off)?;
         let (semantic_bytes, _off) = take_bytes(&plain, off)?;
 
@@ -716,17 +730,36 @@ mod tests {
 
     #[test]
     fn open_rejects_a_header_length_blob_at_the_sealing_key_boundary() {
-        // Past the salt (16) but short of salt+nonce (40): SealingKey::open's own bounds check
-        // returns Truncated (a `<`→`false` mutant would proceed and mis-report).
+        // Short of the version+salt+nonce header (41 bytes): the header split returns Truncated
+        // (a `<`→`false` mutant would proceed and mis-report).
         assert_eq!(
             Mnema::open(&[0u8; 20], b"key", VowelEmbedder).err(),
             Some(StoreError::Truncated)
         );
-        // Exactly 40 bytes IS a full header, so control reaches the AEAD, which rejects the empty
-        // ciphertext → Decrypt. Pins the `<` boundary (not `<=`).
+        // Exactly 41 bytes IS a full header, so the length check passes and control reaches the
+        // version check; an all-zero blob's version byte (0) is unrecognised → UnknownVersion.
+        // Pins the `<` length boundary (a `<=` mutant would mis-report Truncated here).
         assert_eq!(
-            Mnema::open(&[0u8; 40], b"key", VowelEmbedder).err(),
-            Some(StoreError::Decrypt)
+            Mnema::open(&[0u8; 41], b"key", VowelEmbedder).err(),
+            Some(StoreError::UnknownVersion)
+        );
+    }
+
+    #[test]
+    fn open_refuses_an_embedder_of_a_different_width() {
+        use crate::embed::HashEmbedder;
+        let mut mem = Mnema::new(HashEmbedder::new(64));
+        mem.remember(EgressTier::Open, "a stored memory");
+        let blob = mem.seal(b"pw").unwrap();
+        // the same width reopens fine
+        assert!(Mnema::open(&blob, b"pw", HashEmbedder::new(64)).is_ok());
+        // a different width is refused, not silently rebuilt at the wrong dimensionality
+        assert_eq!(
+            Mnema::open(&blob, b"pw", HashEmbedder::new(128)).err(),
+            Some(StoreError::EmbedderWidthMismatch {
+                stored: 64,
+                embedder: 128,
+            })
         );
     }
 
