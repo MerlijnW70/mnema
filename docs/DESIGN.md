@@ -1,11 +1,22 @@
 # Proposal: **Mnema** — a fast, secure, local-first memory layer for LLMs
 
-> Status: **DRAFT / RFC** — not an accepted decision. This is the "design doc first"
-> deliverable. Nothing here is built yet. It exists to be argued with before code.
+> **Status: HISTORICAL PROPOSAL — superseded by the implementation.** This was the
+> "design doc first" RFC, written *before* the code, and kept for provenance. It is **not**
+> the current source of truth, and several parts were deliberately built differently or not
+> at all. For what Mnema actually is, read the [README](../README.md), the [ADRs](adr/), and
+> the source. Known, intentional divergences from this proposal:
 >
-> Codename **Mnema** (a stored memory trace) — a memory engine that sits next to
-> `emerge` and reuses its substrates (`bloom.rs`, `cache.rs`) and its correctness
-> discipline (noha: a green build proves the changed logic is *tested*).
+> - **Vector index:** HNSW → an exact `VectorIndex` (the correctness oracle) plus an opt-in
+>   approximate `IvfIndex`; ANN recall is a channel-B (measured, not ratchet-pinned) concern.
+> - **Keyword retrieval:** full BM25 → a simpler distinct-term-overlap `keyword_rank`.
+> - **Context assembly:** MMR / knapsack diversity → recency + character-budget packing.
+> - **Persistence:** an append-only log → a **whole-store seal** (ADR-0024), chosen for true
+>   immediate hard-delete. Every blob now carries a format-version byte and the embedder width.
+> - **Not built:** the entity/relation **graph** index, **bloom/vector write-time dedup**, and
+>   a write-time injection classifier. Retrieval delivers memories as *data*, never instructions.
+>
+> Codename **Mnema** (a stored memory trace) — a memory engine built next to `emerge` under
+> its correctness discipline (noha: a green build proves the changed logic is *tested*).
 
 ---
 
