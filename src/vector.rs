@@ -1,4 +1,4 @@
-//! Vector retrieval — Phase-2 slice A (`docs/proposals/engram-memory-layer.md` §3.3).
+//! Vector retrieval — Phase-2 slice A (`docs/proposals/mnema-memory-layer.md` §3.3).
 //! The pluggable [`Embedder`] seam promised by ADR-0020 (bring-your-own model, so the
 //! heavy ML dependency is the caller's choice, never ours) plus an **exact** cosine
 //! [`VectorIndex`].
@@ -18,7 +18,7 @@ use std::cmp::Ordering;
 use crate::MemoryId;
 
 /// A text-to-vector embedder. Implemented by the caller (ADR-0020's pluggable seam):
-/// Engram never bundles an embedding model, so a local gguf/ONNX model — or a stub —
+/// Mnema never bundles an embedding model, so a local gguf/ONNX model — or a stub —
 /// is the caller's choice. All vectors handed to one [`VectorIndex`] must share `dims`.
 pub trait Embedder {
     /// Embed `text` into a fixed-length vector of `dims()` elements.
@@ -557,8 +557,14 @@ mod tests {
         assert_eq!(cs.len(), 2);
         // Cluster 0 ≈ mean([1,0],[0.9,0.1]) = [0.95, 0.05]; cluster 1 ≈ [0.05, 0.95]. Exact
         // values pin the mean division (a missing `/count` would leave the raw sums).
-        assert!((cs[0][0] - 0.95).abs() < 1e-4 && (cs[0][1] - 0.05).abs() < 1e-4, "{cs:?}");
-        assert!((cs[1][0] - 0.05).abs() < 1e-4 && (cs[1][1] - 0.95).abs() < 1e-4, "{cs:?}");
+        assert!(
+            (cs[0][0] - 0.95).abs() < 1e-4 && (cs[0][1] - 0.05).abs() < 1e-4,
+            "{cs:?}"
+        );
+        assert!(
+            (cs[1][0] - 0.05).abs() < 1e-4 && (cs[1][1] - 0.95).abs() < 1e-4,
+            "{cs:?}"
+        );
     }
 
     #[test]
@@ -568,7 +574,11 @@ mod tests {
         let data = vec![vec![1.0, 0.0], vec![1.0, 0.0]];
         let cs = kmeans_anchors(&data, 2, 3);
         assert_eq!(cs.len(), 2);
-        assert_eq!(cs[1], vec![1.0, 0.0], "empty cluster kept its centroid (no NaN)");
+        assert_eq!(
+            cs[1],
+            vec![1.0, 0.0],
+            "empty cluster kept its centroid (no NaN)"
+        );
     }
 
     #[test]
@@ -590,6 +600,9 @@ mod tests {
         assert!(kmeans_anchors(&[], 3, 5).is_empty()); // empty corpus
         assert!(kmeans_anchors(&[vec![1.0, 0.0]], 0, 5).is_empty()); // k == 0
         // k larger than the corpus is clamped to the corpus size.
-        assert_eq!(kmeans_anchors(&[vec![1.0, 0.0], vec![0.0, 1.0]], 5, 3).len(), 2);
+        assert_eq!(
+            kmeans_anchors(&[vec![1.0, 0.0], vec![0.0, 1.0]], 5, 3).len(),
+            2
+        );
     }
 }

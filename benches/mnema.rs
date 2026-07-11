@@ -1,4 +1,4 @@
-//! Channel B for Engram's vector recall (docs/SELF-EVOLUTION.md, Part 25). Two indexes
+//! Channel B for Mnema's vector recall (docs/SELF-EVOLUTION.md, Part 25). Two indexes
 //! over one fixed, deterministic workload: the **exact** `VectorIndex` (the O(N) oracle)
 //! and the **approximate** `IvfIndex` (scans `PROBE` of `ANCHORS` buckets). Reported:
 //! `exact_ns_per_op` / `ivf_ns_per_op` (speed, lower = fitter — the win an ANN index
@@ -6,9 +6,9 @@
 //! *quality* traded for that speed, a channel-B objective like the Bloom filter's FP
 //! rate, Part 18). `top` is the behavioral pin: a nearest neighbour planted at id 0
 //! (identical to the query) must rank first in the exact search, every run. Run with
-//! `cargo bench --bench engram` or `scripts/fitness-engram.sh`.
+//! `cargo bench --bench mnema` or `scripts/fitness-mnema.sh`.
 
-use engram::vector::{IvfIndex, VectorIndex, kmeans_anchors};
+use mnema::vector::{IvfIndex, VectorIndex, kmeans_anchors};
 use std::time::Instant;
 
 const DIMS: usize = 64;
@@ -76,7 +76,12 @@ fn exact_top(corpus: &[(u64, Vec<f32>)], query: &[f32]) -> Vec<u64> {
 }
 
 /// Fraction of the exact top-K that an IVF built on `anchors` recovers at PROBE buckets.
-fn recall(corpus: &[(u64, Vec<f32>)], query: &[f32], anchors: Vec<Vec<f32>>, oracle: &[u64]) -> f64 {
+fn recall(
+    corpus: &[(u64, Vec<f32>)],
+    query: &[f32],
+    anchors: Vec<Vec<f32>>,
+    oracle: &[u64],
+) -> f64 {
     let mut ivf = IvfIndex::new(DIMS, anchors);
     for (id, v) in corpus {
         ivf.insert(*id, v.clone()).unwrap();
@@ -118,7 +123,11 @@ fn main() {
     let top = *oracle.first().unwrap();
 
     let corpus_vecs: Vec<Vec<f32>> = clustered.iter().map(|(_, v)| v.clone()).collect();
-    let first_n: Vec<Vec<f32>> = clustered.iter().take(ANCHORS).map(|(_, v)| v.clone()).collect();
+    let first_n: Vec<Vec<f32>> = clustered
+        .iter()
+        .take(ANCHORS)
+        .map(|(_, v)| v.clone())
+        .collect();
     let kmeans = kmeans_anchors(&corpus_vecs, ANCHORS, KMEANS_ITERS);
     let recall_first_n = recall(&clustered, &cq, first_n, &oracle);
     let recall_kmeans = recall(&clustered, &cq, kmeans.clone(), &oracle);
@@ -140,7 +149,7 @@ fn main() {
         / N as f64;
 
     println!(
-        "{{\"benchmark\":\"engram\",\"dims\":{DIMS},\"n\":{N},\"k\":{K},\"anchors\":{ANCHORS},\"probe\":{PROBE},\"clusters\":{CLUSTERS},\"top\":{top},\
+        "{{\"benchmark\":\"mnema\",\"dims\":{DIMS},\"n\":{N},\"k\":{K},\"anchors\":{ANCHORS},\"probe\":{PROBE},\"clusters\":{CLUSTERS},\"top\":{top},\
          \"recall_random\":{recall_random:.3},\"recall_clustered_firstN\":{recall_first_n:.3},\"recall_clustered_kmeans\":{recall_kmeans:.3},\
          \"exact_ns_per_op\":{exact_ns_per_op:.3},\"ivf_ns_per_op\":{ivf_ns_per_op:.3}}}"
     );

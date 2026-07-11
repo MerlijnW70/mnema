@@ -1,8 +1,8 @@
-# engram
+# mnema
 
 **A fast, secure, local-first memory layer for LLMs — where every guarantee is proven, not asserted.**
 
-Most memory layers are a vector database with a nice API. `engram` is built around the two things
+Most memory layers are a vector database with a nice API. `mnema` is built around the two things
 that actually matter and that most tools get wrong:
 
 1. **Contradiction-resolving writes** — when a new fact conflicts with an old one, it *supersedes*
@@ -13,11 +13,11 @@ that actually matter and that most tools get wrong:
 Both are enforced as hard invariants and pinned by a mutation ratchet (see [Provenance](#provenance)).
 
 ```rust
-use engram::facade::Engram;
-use engram::embed::HashEmbedder;
-use engram::{Destination, EgressTier};
+use mnema::facade::Mnema;
+use mnema::embed::HashEmbedder;
+use mnema::{Destination, EgressTier};
 
-let mut mem = Engram::new(HashEmbedder::new(64));
+let mut mem = Mnema::new(HashEmbedder::new(64));
 
 mem.remember(EgressTier::Open,    "user is planning a trip to Japan in spring");
 mem.remember(EgressTier::Private, "user's API key is sk-live-abc123");
@@ -28,8 +28,8 @@ mem.remember_fact("user", "diet", "omnivore");   // supersedes — belief is now
 let ctx = mem.recall("what should I know?", Destination::Remote, 5, 2000);
 
 let blob = mem.seal(b"passphrase")?;             // the whole mind, encrypted at rest
-let mem  = Engram::open(&blob, b"passphrase", HashEmbedder::new(64))?;   // fully restored
-# Ok::<(), engram::store::StoreError>(())
+let mem  = Mnema::open(&blob, b"passphrase", HashEmbedder::new(64))?;   // fully restored
+# Ok::<(), mnema::store::StoreError>(())
 ```
 
 ## The four memory types
@@ -64,13 +64,13 @@ and the result is packed through the egress filter under a character budget.
 
 Retrieval is **exact** by default (the correctness oracle). An approximate `IvfIndex` trades recall
 for speed and is **opt-in** (`build_ann` + `recall_fast`); at full probe it returns exactly what the
-exact index does. Recall-vs-speed is measured, not pinned — run `cargo bench --bench engram`.
+exact index does. Recall-vs-speed is measured, not pinned — run `cargo bench --bench mnema`.
 
 ## Security
 
-`engram`'s core (retrieval, semantic, working, vector, egress) is **zero-dependency**. Encryption
+`mnema`'s core (retrieval, semantic, working, vector, egress) is **zero-dependency**. Encryption
 lives behind an optional **`secure`** feature (three vetted, safe-Rust crates: `chacha20poly1305`,
-`argon2`, `getrandom`), which also enables the `Engram` facade, the `engram` CLI, and `seal`/`open`.
+`argon2`, `getrandom`), which also enables the `Mnema` facade, the `mnema` CLI, and `seal`/`open`.
 
 - **Egress tiers** — every memory is `Open`, `Redacted`, or `Private`; a `Private` memory bound for a
   `Remote` destination is dropped, unconditionally, at the read path's choke point.
@@ -93,10 +93,10 @@ cargo test --features secure
 cargo run --example memory_demo --features secure
 
 # the CLI (remember/recall/fact/stats over an encrypted store):
-cargo build --features secure --bin engram
-export ENGRAM_KEY="your-passphrase"
-./target/debug/engram remember mind.engram open "the cat sat on the mat"
-./target/debug/engram recall   mind.engram 5 "cat"
+cargo build --features secure --bin mnema
+export MNEMA_KEY="your-passphrase"
+./target/debug/mnema remember mind.mnema open "the cat sat on the mat"
+./target/debug/mnema recall   mind.mnema 5 "cat"
 ```
 
 ## Documentation
@@ -109,7 +109,7 @@ export ENGRAM_KEY="your-passphrase"
 
 ## Provenance
 
-`engram` was extracted from the [**emerge**](https://github.com/MerlijnW70/private) research project,
+`mnema` was extracted from the [**emerge**](https://github.com/MerlijnW70/private) research project,
 where it was built from commit one under **internal-tool** — a zero-dependency mutation-coverage gate whose
 rule is that *a green build proves the changed logic is tested*. Every invariant above is pinned by
 that ratchet: at extraction, **155/155 viable mutants killed, 0 survivors, 100%**. Cross-references in
@@ -118,7 +118,7 @@ the ADRs to `ADR-0007`, `BND-*`, or `Part N` point back to the emerge repository
 
 ## Validated in a live agentic loop
 
-Beyond its unit tests, `engram` has been driven by a **real self-improving agent** (emerge's
+Beyond its unit tests, `mnema` has been driven by a **real self-improving agent** (emerge's
 evolution loop, see [`docs/adr/0022`](docs/adr/0022-memory-augmented-self-evolution.md)): the loop
 stored each iteration's verdict as a memory and recalled the relevant lessons before the next
 proposal. In live runs the proposer **demonstrably used the recall** — it cited a recorded rejection

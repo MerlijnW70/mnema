@@ -1,4 +1,4 @@
-//! Working memory — the fourth memory type (`docs/proposals/engram-memory-layer.md`
+//! Working memory — the fourth memory type (`docs/proposals/mnema-memory-layer.md`
 //! §3.1). An ephemeral scratchpad for the current session: short-lived notes that
 //! **expire with age** (a time-to-live horizon) and are **capacity-bounded** (the
 //! oldest is evicted when full). Unlike the episodic/semantic stores it is not
@@ -17,7 +17,7 @@ pub struct Note {
 }
 
 /// A bounded, self-expiring scratchpad. `at`/`now` are caller-supplied logical times
-/// (Engram never reads the wall clock), keeping it deterministic and testable.
+/// (Mnema never reads the wall clock), keeping it deterministic and testable.
 #[derive(Clone, Debug)]
 pub struct WorkingMemory {
     horizon: u64,

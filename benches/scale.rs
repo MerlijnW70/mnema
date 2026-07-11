@@ -1,16 +1,16 @@
 //! Scale sweep — how exact vs approximate (IVF) recall behaves as the corpus grows.
 //!
-//! The `engram` bench answers "exact vs IVF at one size"; this answers "how does the gap
+//! The `mnema` bench answers "exact vs IVF at one size"; this answers "how does the gap
 //! move with N". For each N it reports the *raw per-search latency* (microseconds, not
 //! per-op) of the exact O(N) scan and the k-means-anchored IVF, plus the speedup and the
 //! IVF's recall of the exact top-k. The workload is the realistic clustered one (topically
 //! batched), so recall reflects real embeddings rather than structureless noise.
 //!
-//! Deliberately not wired into the fitness signal (`scripts/fitness-engram.sh`) — building a
+//! Deliberately not wired into the fitness signal (`scripts/fitness-mnema.sh`) — building a
 //! 100k-vector index + training anchors is seconds of work. Run on demand:
 //! `cargo bench --bench scale`.
 
-use engram::vector::{IvfIndex, VectorIndex, kmeans_anchors};
+use mnema::vector::{IvfIndex, VectorIndex, kmeans_anchors};
 use std::time::Instant;
 
 const DIMS: usize = 64;

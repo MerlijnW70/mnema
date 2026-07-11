@@ -21,8 +21,8 @@ pub struct HashEmbedder {
 
 impl HashEmbedder {
     /// The canonical width for the built-in default embedder, and the single source of
-    /// truth for it. Every process that touches one store family — the `engram` CLI and
-    /// the `engram-mcp` server both do — must embed at the *same* width: a query vector
+    /// truth for it. Every process that touches one store family — the `mnema` CLI and
+    /// the `mnema-mcp` server both do — must embed at the *same* width: a query vector
     /// of a different length than the stored vectors makes cosine similarity meaningless
     /// and silently corrupts recall. Pinning it here, rather than as a private `const` in
     /// each binary, makes that agreement structural instead of a convention two crates can
@@ -127,8 +127,14 @@ mod tests {
     fn l2_normalize_scales_to_unit_length_and_guards_zero() {
         // [3,4] has norm 5 → [0.6, 0.8].
         let n = l2_normalize(vec![3.0, 4.0]);
-        assert!((n[0] - 0.6).abs() < 1e-6 && (n[1] - 0.8).abs() < 1e-6, "{n:?}");
-        assert!((n.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-6, "unit length");
+        assert!(
+            (n[0] - 0.6).abs() < 1e-6 && (n[1] - 0.8).abs() < 1e-6,
+            "{n:?}"
+        );
+        assert!(
+            (n.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-6,
+            "unit length"
+        );
         // a zero vector is returned unchanged.
         assert_eq!(l2_normalize(vec![0.0, 0.0]), vec![0.0, 0.0]);
     }

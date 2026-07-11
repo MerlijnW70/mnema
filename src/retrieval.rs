@@ -1,4 +1,4 @@
-//! Hybrid retrieval — Phase-2 slice B (`docs/proposals/engram-memory-layer.md` §3.3).
+//! Hybrid retrieval — Phase-2 slice B (`docs/proposals/mnema-memory-layer.md` §3.3).
 //! The read path that ties the pieces together: run several independent retrievers
 //! (dense vector, recency, lexical keyword), **fuse** their rankings with reciprocal-
 //! rank fusion, resolve the winners back to memories, and pack them through the
@@ -544,7 +544,14 @@ mod tests {
         idx.insert(1, embedder.embed("iou")).unwrap();
         idx.insert(2, embedder.embed("bcd")).unwrap();
         let bundle = hybrid_recall(
-            "aei", &mems, &idx, &embedder, Destination::Local, 1, 1_000, None,
+            "aei",
+            &mems,
+            &idx,
+            &embedder,
+            Destination::Local,
+            1,
+            1_000,
+            None,
             RetrievalWeights::default(),
         );
         assert!(
@@ -563,14 +570,23 @@ mod tests {
         let recency = vec![2u64];
 
         let equal = rrf_fuse_weighted(&[(1.0, &dense), (1.0, &keyword), (1.0, &recency)]);
-        assert_eq!(equal[0].id, 2, "balanced fusion: the lexical + recent decoy wins");
+        assert_eq!(
+            equal[0].id, 2,
+            "balanced fusion: the lexical + recent decoy wins"
+        );
 
         // Weight the dense retriever up (RetrievalWeights::semantic) and the single semantic
         // vote outweighs the decoy's two — the meaning-match now wins.
         let w = RetrievalWeights::semantic();
-        let weighted =
-            rrf_fuse_weighted(&[(w.dense, &dense), (w.keyword, &keyword), (w.recency, &recency)]);
-        assert_eq!(weighted[0].id, 1, "dense-weighted fusion: the semantic match wins");
+        let weighted = rrf_fuse_weighted(&[
+            (w.dense, &dense),
+            (w.keyword, &keyword),
+            (w.recency, &recency),
+        ]);
+        assert_eq!(
+            weighted[0].id, 1,
+            "dense-weighted fusion: the semantic match wins"
+        );
     }
 
     #[test]

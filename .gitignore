@@ -1,10 +1,10 @@
 /target
 Cargo.lock
 
-# Engram stores are encrypted, machine-specific data — never source.
-*.engram
+# Mnema stores are encrypted, machine-specific data — never source.
+*.mnema
 
-# Per-store key: the random secret that seals the sibling *.engram. NEVER source.
+# Per-store key: the random secret that seals the sibling *.mnema. NEVER source.
 *.key
 
 # Project-scoped MCP config: machine-specific store path. Keep out of source control.
