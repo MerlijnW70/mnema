@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint:
+    name: fmt · clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      # The mutation gate's own guard: the library under `secure`.
+      - run: cargo clippy --all-targets --features secure -- -D warnings
+      # The MCP server binary under its feature.
+      - run: cargo clippy --bin mnema-mcp --features mcp -- -D warnings
+
+  test:
+    name: test · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+      # Exactly what the noha ratchet runs locally.
+      - run: cargo test --features secure
+
+  build:
+    name: zero-dep core + mcp binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+      # The default build must stay zero-dependency (no features → core only).
+      - run: cargo build
+      # The MCP server must build under its feature.
+      - run: cargo build --features mcp --bin mnema-mcp
