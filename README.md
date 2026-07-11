@@ -99,6 +99,32 @@ export MNEMA_KEY="your-passphrase"
 ./target/debug/mnema recall   mind.mnema 5 "cat"
 ```
 
+## Use it as an MCP server
+
+Give any MCP client (Claude Code, Cursor, Claude Desktop) private, local, encrypted memory.
+Because `recall` is egress-filtered, a `Private` memory **never reaches the model**:
+
+```bash
+cargo build --release --features mcp --bin mnema-mcp
+```
+
+Point your MCP client at the binary, with the store path and passphrase in the environment:
+
+```jsonc
+{
+  "mcpServers": {
+    "mnema": {
+      "command": "/path/to/mnema-mcp",
+      "env": { "MNEMA_PATH": "~/mnema.store", "MNEMA_KEY": "your-passphrase" }
+    }
+  }
+}
+```
+
+Tools: **remember** (with an `open` / `redacted` / `private` tier), **recall**,
+**remember_fact**, **forget**, **stats**. The server is thin glue over the library — every
+guarantee above still holds, and the memory logic stays mutation-pinned.
+
 ## Documentation
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the full architecture, threat model, and phased build plan.
