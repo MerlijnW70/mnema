@@ -17,3 +17,6 @@ Cargo.lock
 # install, not source. Kept on disk to run the gate locally; never published or committed.
 .internal-tool/
 internal-tool.yaml
+
+# Internal design docs (ADRs, design proposal) — kept local, not published.
+docs/

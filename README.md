@@ -132,14 +132,6 @@ Tools: **remember** (with an `open` / `redacted` / `private` tier), **recall**,
 **remember_fact**, **forget**, **stats**. The server is thin glue over the library — every
 guarantee above still holds, and the memory logic stays mutation-pinned.
 
-## Documentation
-
-- [`docs/DESIGN.md`](docs/DESIGN.md) — the architecture, threat model, and phased build plan
-  (a historical proposal; see the banner at its top).
-- [`docs/adr/`](docs/adr/) — the architecture decisions: the dependency budget (0020), the egress
-  wall (0021), the embedder-width invariant (0023), whole-store-seal persistence (0024), and the
-  MCP server (0025).
-
 ## Correctness
 
 Every invariant above is pinned by a **zero-dependency mutation-coverage gate**, whose rule is
