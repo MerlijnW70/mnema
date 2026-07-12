@@ -23,11 +23,12 @@
 //!   mnema rekey    <store>   # $MNEMA_KEY = old passphrase; re-seals under a new keyfile
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::exit;
 
 use mnema::embed::HashEmbedder;
 use mnema::facade::Mnema;
+use mnema::keyfile::{self, generate_keyfile, keyfile_path};
 use mnema::{Destination, EgressTier};
 
 /// The default embedder's width, pinned once in the library so this CLI and the
@@ -40,58 +41,10 @@ fn die(msg: &str) -> ! {
     exit(1);
 }
 
-/// The sidecar keyfile for a store: `<store>.key`.
-fn keyfile_path(store: &Path) -> PathBuf {
-    let mut s = store.as_os_str().to_owned();
-    s.push(".key");
-    PathBuf::from(s)
-}
-
-/// Tighten a keyfile's permissions to owner-only where the OS models it (unix `0600`).
-/// On Windows we rely on the profile/directory ACLs — `std` exposes no portable mode.
-#[cfg(unix)]
-fn restrict_perms(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-#[cfg(not(unix))]
-fn restrict_perms(_path: &Path) {}
-
-/// Generate a fresh random 32-byte key, persist it to `path`, and return it.
-fn generate_keyfile(path: &Path) -> Vec<u8> {
-    let mut k = [0u8; 32];
-    getrandom::getrandom(&mut k).unwrap_or_else(|_| die("keygen: system entropy unavailable"));
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    std::fs::write(path, k)
-        .unwrap_or_else(|e| die(&format!("write keyfile {}: {e}", path.display())));
-    restrict_perms(path);
-    k.to_vec()
-}
-
-/// The per-store key: `$MNEMA_KEY` if set, else the sidecar keyfile. A keyfile is generated
-/// only for a store that does not yet exist — never for an existing store missing its key
-/// (that is a migration, handled by `rekey`), so we can't silently lock the data away.
+/// The per-store key via the shared [`keyfile::resolve_key`], mapping any failure to a CLI exit
+/// (the migration case gets the `rekey` hint).
 fn resolve_key(store: &Path) -> Vec<u8> {
-    if let Ok(k) = std::env::var("MNEMA_KEY")
-        && !k.is_empty()
-    {
-        return k.into_bytes();
-    }
-    let keyfile = keyfile_path(store);
-    match std::fs::read(&keyfile) {
-        Ok(b) if b.len() == 32 => b,
-        Ok(_) => die(&format!(
-            "keyfile {} is malformed (expected 32 bytes)",
-            keyfile.display()
-        )),
-        Err(_) if store.exists() => {
-            die("store exists but has no keyfile and $MNEMA_KEY is unset — \
-             set $MNEMA_KEY to the old passphrase and run `mnema rekey <store>` to migrate")
-        }
-        Err(_) => generate_keyfile(&keyfile),
-    }
+    keyfile::resolve_key(store).unwrap_or_else(|e| die(&e.to_string()))
 }
 
 fn load(store: &str) -> Mnema<HashEmbedder> {
@@ -186,7 +139,7 @@ fn rekey(store: &str) {
             "rekey: {} is malformed (expected 32 bytes); remove it and retry",
             keyfile.display()
         )),
-        Err(_) => generate_keyfile(&keyfile),
+        Err(_) => generate_keyfile(&keyfile).unwrap_or_else(|e| die(&format!("rekey: {e}"))),
     };
     let blob = mem
         .seal(&new_key)
