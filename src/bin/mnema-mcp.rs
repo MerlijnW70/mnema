@@ -40,6 +40,12 @@ fn main() {
         eprintln!("mnema-mcp: MNEMA_KEY is empty — set a passphrase to encrypt the store at rest");
     }
 
+    // Hold an exclusive advisory lock on the store for the whole session. A resident server keeps
+    // the store in RAM and re-seals it on every write, so a second concurrent writer's records
+    // would be silently clobbered by the next re-seal. `_lock` lives to the end of main; the OS
+    // releases it when the process exits (even on crash).
+    let _lock = lock_store(&path);
+
     // The embedder is chosen at compile time. `serve` is generic over it, so the whole server
     // is identical either way — only the vector arm of recall differs (lexical vs semantic).
     #[cfg(feature = "local-embed")]
@@ -436,6 +442,32 @@ fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
         f.sync_all()?;
     }
     std::fs::rename(&tmp, path)
+}
+
+/// Take an exclusive advisory lock for the store via a sibling `<path>.lock`, returning the held
+/// `File` (drop it to release; the OS also releases on process exit). Refuses to start if another
+/// mnema process already holds it, so two writers can't clobber each other. The lock file is
+/// separate from the store because the store is atomically *renamed* on every write, which would
+/// drop a lock held on the store file itself.
+fn lock_store(path: &str) -> std::fs::File {
+    let lockpath = format!("{path}.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lockpath)
+        .unwrap_or_else(|e| {
+            eprintln!("mnema-mcp: cannot open lock file {lockpath} ({e})");
+            std::process::exit(1);
+        });
+    if file.try_lock().is_err() {
+        eprintln!(
+            "mnema-mcp: {path} is already in use by another mnema process — refusing to start so a \
+             concurrent writer's memories are not overwritten. Stop the other process and retry."
+        );
+        std::process::exit(1);
+    }
+    file
 }
 
 /// Open the store at `path`, or start a fresh one **only if there is no file yet**. `make`

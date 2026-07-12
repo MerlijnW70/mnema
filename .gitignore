@@ -9,6 +9,9 @@ Cargo.lock
 # Per-store key: the random secret that seals the sibling *.mnema. NEVER source.
 *.key
 
+# Per-store advisory lock file (mnema-mcp / mnema hold this to prevent concurrent writers).
+*.lock
+
 # Project-scoped MCP config: machine-specific store path. Keep out of source control.
 .mcp.json
 
