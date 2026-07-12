@@ -53,6 +53,18 @@ pub fn decayed_score(base: f32, importance: f32, age: u64, half_life: u64) -> f3
     base * importance * decay_weight(age, half_life)
 }
 
+/// Whether a memory has faded below `threshold` and should be forgotten: its standalone
+/// salience — `importance × decay_weight(age, half_life)` — has dropped under the cutoff.
+/// This is the same product [`decayed_score`] uses (with a `base` of `1.0`), so pruning and
+/// ranking agree on what "faded" means. A fresh or important memory survives; only the
+/// stale-*and*-dull fall through. With `half_life == 0` (decay disabled) salience is just
+/// `importance`, so this prunes purely by importance. A `threshold` of `0.0` prunes nothing,
+/// since salience is always `> 0`. The cutoff is strict (`<`): a memory sitting exactly at
+/// the threshold is kept.
+pub fn is_faded(importance: f32, age: u64, half_life: u64, threshold: f32) -> bool {
+    importance * decay_weight(age, half_life) < threshold
+}
+
 /// A fused hit: a memory id and its summed reciprocal-rank score.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fused {
@@ -663,6 +675,20 @@ mod tests {
         assert!(approx(decayed_score(4.0, 1.0, 10, 10), 2.0));
         // Importance multiplies too: 1 × 3 × 0.5 = 1.5.
         assert!(approx(decayed_score(1.0, 3.0, 10, 10), 1.5));
+    }
+
+    #[test]
+    fn is_faded_prunes_only_the_stale_and_dull() {
+        // Fresh and important: 4 × 1.0 = 4.0 ≥ 1.0 → keep.
+        assert!(!is_faded(4.0, 0, 10, 1.0));
+        // One half-life, neutral: 1 × 0.5 = 0.5 < 1.0 → faded, prune.
+        assert!(is_faded(1.0, 10, 10, 1.0));
+        // One half-life but important: 4 × 0.5 = 2.0 ≥ 1.0 → importance rescues it.
+        assert!(!is_faded(4.0, 10, 10, 1.0));
+        // Exactly at the threshold is KEPT (strict `<`): 1 × 0.5 = 0.5, cutoff 0.5.
+        assert!(!is_faded(1.0, 10, 10, 0.5));
+        // A threshold of 0.0 never prunes: salience stays > 0 even for a tiny, ancient memory.
+        assert!(!is_faded(0.01, 1_000_000, 1, 0.0));
     }
 
     #[test]
