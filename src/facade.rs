@@ -137,6 +137,15 @@ impl<E: Embedder> Mnema<E> {
         content: &str,
         redacted: &str,
     ) -> MemoryId {
+        // A non-finite importance would poison the forgetting curve: `NaN` makes every
+        // `decayed_score`/`is_faded` comparison false — corrupting recall order and leaving the
+        // memory *un-prunable* — and `inf` swamps all ranking. Sanitize to neutral salience so a
+        // bad input (e.g. a huge JSON number that overflows `f32` to `inf`) can't wreck retrieval.
+        let importance = if importance.is_finite() {
+            importance
+        } else {
+            1.0
+        };
         let at = self.tick();
         let vector = self.embedder.embed(content);
         let id = self.episodic.append_redacted(
@@ -707,6 +716,18 @@ mod tests {
         assert_eq!(s.beliefs, 3);
         assert_eq!(s.private_beliefs, 1);
         assert_eq!(s.indexed, 6);
+    }
+
+    #[test]
+    fn remember_with_neutralizes_a_non_finite_importance() {
+        let mut e = Mnema::new(VowelEmbedder);
+        let nan = e.remember_with(EgressTier::Open, f32::NAN, "aaa", "");
+        let inf = e.remember_with(EgressTier::Open, f32::INFINITY, "bbb", "");
+        // With half_life 0, salience == importance. Left as NaN/inf, `is_faded`'s `< threshold`
+        // would be false and BOTH would be un-prunable; sanitized to 1.0 they fall below 2.0.
+        let receipt = e.prune_faded(0, 2.0);
+        assert_eq!(receipt.purged, vec![nan, inf]);
+        assert_eq!(receipt.remaining, 0);
     }
 
     #[test]
