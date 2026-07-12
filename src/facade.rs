@@ -82,21 +82,16 @@ impl<E: Embedder> Mnema<E> {
 
     /// Store an episodic memory with an explicit `importance` (see [`Memory::importance`]),
     /// which lifts it against the forgetting curve in [`recall_decayed`](Mnema::recall_decayed).
+    /// The redacted surface is left empty, so this is for `Open` or `Private` tiers — a
+    /// `Redacted` memory needs [`remember_redacted`](Mnema::remember_redacted) (or
+    /// [`remember_with`](Mnema::remember_with)) to carry a surface that can go remote.
     pub fn remember_important(
         &mut self,
         tier: EgressTier,
         importance: f32,
         content: &str,
     ) -> MemoryId {
-        let at = self.tick();
-        let vector = self.embedder.embed(content);
-        let id =
-            self.episodic
-                .append_important(MemoryKind::Episodic, tier, at, importance, content);
-        // The index width equals the embedder's dims, so a well-behaved embedder never
-        // mismatches; a broken one just leaves this memory unindexed (still stored).
-        let _ = self.index.insert(id, vector);
-        id
+        self.remember_with(tier, importance, content, "")
     }
 
     /// Store a `Redacted`-tier episodic memory: `content` is kept locally, but a `Remote`
@@ -104,16 +99,34 @@ impl<E: Embedder> Mnema<E> {
     /// the only way to attach a real redacted surface — [`remember`](Mnema::remember) leaves
     /// it empty, so a `Redacted` memory made that way would emit nothing remotely.
     pub fn remember_redacted(&mut self, content: &str, redacted: &str) -> MemoryId {
+        self.remember_with(EgressTier::Redacted, 1.0, content, redacted)
+    }
+
+    /// Store an episodic memory with full control over all four knobs: egress `tier`,
+    /// `importance`, the local `content`, and the `redacted` surface a `Remote` bundle emits
+    /// in place of the content for a `Redacted`-tier memory. The surface is ignored for
+    /// `Open` (which emits the content) and `Private` (which emits nothing), so it only bites
+    /// on the `Redacted` tier. [`remember_important`](Mnema::remember_important) and
+    /// [`remember_redacted`](Mnema::remember_redacted) are the common shorthands over this.
+    pub fn remember_with(
+        &mut self,
+        tier: EgressTier,
+        importance: f32,
+        content: &str,
+        redacted: &str,
+    ) -> MemoryId {
         let at = self.tick();
         let vector = self.embedder.embed(content);
         let id = self.episodic.append_redacted(
             MemoryKind::Episodic,
-            EgressTier::Redacted,
+            tier,
             at,
-            1.0,
+            importance,
             content,
             redacted,
         );
+        // The index width equals the embedder's dims, so a well-behaved embedder never
+        // mismatches; a broken one just leaves this memory unindexed (still stored).
         let _ = self.index.insert(id, vector);
         id
     }
@@ -593,6 +606,28 @@ mod tests {
         assert!(remote.iter().all(|b| !b.text.contains("secret")));
         let local = e.recall("dog", Destination::Local, 10, 1_000);
         assert!(local.iter().any(|b| b.text == "the secret dog plan"));
+    }
+
+    #[test]
+    fn remember_with_carries_a_redacted_surface_that_replaces_content_remotely() {
+        let mut e = Mnema::new(VowelEmbedder);
+        let id = e.remember_with(
+            EgressTier::Redacted,
+            3.0,
+            "full secret dossier",
+            "a sealed note",
+        );
+        // Remote emits the redacted surface in place of the content — never the content itself.
+        let remote = e.recall("secret note", Destination::Remote, 10, 1_000);
+        assert!(
+            remote
+                .iter()
+                .any(|b| b.id == id && b.text == "a sealed note")
+        );
+        assert!(remote.iter().all(|b| b.text != "full secret dossier"));
+        // Local sees the real content.
+        let local = e.recall("secret note", Destination::Local, 10, 1_000);
+        assert!(local.iter().any(|b| b.text == "full secret dossier"));
     }
 
     #[test]
