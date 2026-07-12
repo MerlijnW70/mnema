@@ -130,6 +130,15 @@ fn tools_list() -> Value {
             }
         },
         {
+            "name": "beliefs",
+            "description": "List everything known about a subject — its live beliefs as 'subject.attribute = value'. Private beliefs are filtered out.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "subject": { "type": "string" } },
+                "required": ["subject"]
+            }
+        },
+        {
             "name": "forget",
             "description": "Hard-delete every memory whose content contains the given substring.",
             "inputSchema": {
@@ -197,6 +206,20 @@ fn handle_tool_call(
             let res = store.remember_fact(&s, &a, &v);
             persist(store, path, key);
             format!("belief {s}.{a} = {v:?} ({res:?})")
+        }
+        "beliefs" => {
+            let subject = arg_str("subject");
+            // Destination::Remote applies the egress wall: Private beliefs are withheld.
+            let facts = store.beliefs(&subject, Destination::Remote);
+            if facts.is_empty() {
+                format!("(nothing known about {subject})")
+            } else {
+                facts
+                    .iter()
+                    .map(|f| format!("{}.{} = {}", f.subject, f.attribute, f.value))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
         }
         "forget" => {
             let needle = arg_str("contains");

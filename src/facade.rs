@@ -151,6 +151,13 @@ impl<E: Embedder> Mnema<E> {
         self.semantic.current_for(subject, attribute, dest)
     }
 
+    /// Every live belief about `subject` **as visible to `dest`** — answers "what do we know
+    /// about X?" across all attributes. Beliefs the egress filter would deny are withheld, so
+    /// a `Remote` model never sees a `Private` belief.
+    pub fn beliefs(&self, subject: &str, dest: Destination) -> Vec<&Fact> {
+        self.semantic.beliefs_for(subject, dest)
+    }
+
     /// Hard-delete every semantic fact matching `predicate` (live or superseded), returning
     /// how many were removed — the right-to-be-forgotten path for beliefs, alongside
     /// [`forget`](Mnema::forget) for episodic memories.

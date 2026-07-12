@@ -191,6 +191,26 @@ impl SemanticStore {
             .collect()
     }
 
+    /// Every currently-live belief about `subject`, across all attributes, in insertion order.
+    /// Answers "what do we know about X?" — unlike [`current`](SemanticStore::current), which
+    /// needs the exact attribute.
+    pub fn beliefs_of(&self, subject: &str) -> Vec<&Fact> {
+        self.facts
+            .iter()
+            .filter(|f| f.status == FactStatus::Live && f.subject == subject)
+            .collect()
+    }
+
+    /// Every live belief about `subject` **as visible to `dest`** — the egress-filtered read.
+    /// A belief the egress filter would deny (a `Private`, or a `Redacted` bound `Remote`) is
+    /// withheld, so a `Remote` model can never read it out.
+    pub fn beliefs_for(&self, subject: &str, dest: Destination) -> Vec<&Fact> {
+        self.beliefs_of(subject)
+            .into_iter()
+            .filter(|f| egress_decision(f.tier, dest) == EgressDecision::Allow)
+            .collect()
+    }
+
     /// Index of the live fact for a key, if one exists. The `Live` filter is what
     /// makes "supersede then re-query" return the new belief, not the tombstone.
     fn live_index(&self, subject: &str, attribute: &str) -> Option<usize> {
@@ -373,6 +393,38 @@ mod tests {
                 ("omnivore", FactStatus::Live),
             ]
         );
+    }
+
+    #[test]
+    fn beliefs_of_returns_live_beliefs_across_attributes_for_one_subject() {
+        let mut s = SemanticStore::new();
+        s.assert("alice", "diet", "vegetarian", 1);
+        s.assert("alice", "city", "utrecht", 2);
+        s.assert("alice", "diet", "omnivore", 3); // supersedes alice's diet belief
+        s.assert("bob", "diet", "vegan", 1); // a different subject
+        let beliefs: Vec<(&str, &str)> = s
+            .beliefs_of("alice")
+            .iter()
+            .map(|f| (f.attribute.as_str(), f.value.as_str()))
+            .collect();
+        // only alice's LIVE beliefs — the superseded diet and bob's belief are excluded
+        assert_eq!(beliefs, vec![("city", "utrecht"), ("diet", "omnivore")]);
+    }
+
+    #[test]
+    fn beliefs_for_withholds_private_beliefs_from_a_remote_read() {
+        let mut s = SemanticStore::new();
+        s.assert_tiered("alice", "city", "utrecht", 1, EgressTier::Open);
+        s.assert_tiered("alice", "ssn", "123-45-6789", 1, EgressTier::Private);
+        // Remote: the Private belief is withheld, exactly as if it did not exist.
+        let remote: Vec<&str> = s
+            .beliefs_for("alice", Destination::Remote)
+            .iter()
+            .map(|f| f.attribute.as_str())
+            .collect();
+        assert_eq!(remote, vec!["city"]);
+        // Local: both are visible.
+        assert_eq!(s.beliefs_for("alice", Destination::Local).len(), 2);
     }
 
     #[test]
