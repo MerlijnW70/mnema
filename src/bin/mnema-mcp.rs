@@ -93,12 +93,13 @@ fn tools_list() -> Value {
     json!({ "tools": [
         {
             "name": "remember",
-            "description": "Store a memory. 'tier' controls egress: a 'private' memory is never returned to a remote/cloud model.",
+            "description": "Store a memory. 'tier' controls egress: a 'private' memory is never returned to a remote/cloud model. 'importance' makes a memory rank higher in recall and resist forgetting.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "content": { "type": "string", "description": "the memory text to store" },
-                    "tier": { "type": "string", "enum": ["open", "redacted", "private"], "description": "egress tier (default: open)" }
+                    "tier": { "type": "string", "enum": ["open", "redacted", "private"], "description": "egress tier (default: open)" },
+                    "importance": { "type": "number", "description": "how salient this memory is (default 1.0); higher ranks higher in recall" }
                 },
                 "required": ["content"]
             }
@@ -183,7 +184,11 @@ fn handle_tool_call(
         "remember" => {
             let content = arg_str("content");
             let tier = parse_tier(args.get("tier").and_then(Value::as_str));
-            let id = store.remember(tier, &content);
+            let importance = args
+                .get("importance")
+                .and_then(Value::as_f64)
+                .unwrap_or(1.0) as f32;
+            let id = store.remember_important(tier, importance, &content);
             persist(store, path, key);
             format!("remembered as memory {id}")
         }
@@ -191,8 +196,10 @@ fn handle_tool_call(
             let query = arg_str("query");
             let k = args.get("k").and_then(Value::as_u64).unwrap_or(5) as usize;
             let budget = args.get("budget").and_then(Value::as_u64).unwrap_or(2000) as usize;
-            // Destination::Remote applies the egress wall: Private memories are dropped here.
-            let hits = store.recall(&query, Destination::Remote, k, budget);
+            // recall_decayed with half_life 0 keeps importance weighting (a memory marked
+            // important ranks higher) without time decay; Destination::Remote still drops
+            // Private memories at the egress wall.
+            let hits = store.recall_decayed(&query, Destination::Remote, k, budget, 0);
             if hits.is_empty() {
                 "(no relevant memories)".to_string()
             } else {
