@@ -1,0 +1,91 @@
+name: release
+
+# Build prebuilt `mnema` + `mnema-mcp` binaries for every major platform when a version tag is
+# pushed, and attach them to a GitHub Release. The install scripts (install.sh / install.ps1) then
+# download these — so users get mnema with one command and no Rust toolchain.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes --verify-tag
+
+  build:
+    needs: create-release
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, cross: false }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, cross: true }
+          - { os: macos-latest, target: aarch64-apple-darwin, cross: false }
+          - { os: macos-latest, target: x86_64-apple-darwin, cross: false }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, cross: false }
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin to match rust-toolchain.toml / CI, and add this job's target to that toolchain
+      # (adding it to `stable` would not help a build the pinned 1.96 runs).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      # `--features mcp` pulls in `secure`, so both bins' required-features are satisfied and
+      # `--bins` builds `mnema` and `mnema-mcp` in one shot.
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --features mcp --bins --target ${{ matrix.target }}
+          else
+            cargo build --release --features mcp --bins --target ${{ matrix.target }}
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          stage="mnema-${{ github.ref_name }}-${{ matrix.target }}"
+          bindir="target/${{ matrix.target }}/release"
+          mkdir "$stage"
+          # LICENSE files are optional; skip them if they aren't present yet.
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE-MIT LICENSE-APACHE "$stage/" 2>/dev/null || true
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "$bindir/mnema.exe" "$bindir/mnema-mcp.exe" "$stage/"
+            7z a "$stage.zip" "$stage" >/dev/null
+            echo "ASSET=$stage.zip" >> "$GITHUB_ENV"
+          else
+            cp "$bindir/mnema" "$bindir/mnema-mcp" "$stage/"
+            tar czf "$stage.tar.gz" "$stage"
+            echo "ASSET=$stage.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "$ASSET" --clobber

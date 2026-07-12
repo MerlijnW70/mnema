@@ -87,7 +87,32 @@ lives behind an optional **`secure`** feature (three vetted, safe-Rust crates: `
 - **Not claimed** — unbreakable, or safe against a compromised OS / root / a malicious local model.
   Local-first raises the bar; it does not make the machine a vault. `#![forbid(unsafe_code)]` crate-wide.
 
-## Quickstart
+## Install
+
+**Zero-friction — prebuilt binaries, no Rust toolchain.** Installs both `mnema` (CLI) and
+`mnema-mcp` (MCP server):
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.ps1 | iex
+```
+
+**From source, with a Rust toolchain** — builds and installs both binaries:
+
+```bash
+cargo install --git https://github.com/MerlijnW70/mnema mnema --features mcp
+```
+
+The store is created and encrypted on first use: set `MNEMA_KEY` to a passphrase, or omit it for
+an auto-generated per-store key file (`<store>.key`). Then [point your MCP client](#use-it-as-an-mcp-server)
+at `mnema-mcp`.
+
+## Quickstart (from a checkout)
 
 ```bash
 # library (core, zero-dependency):
