@@ -10,20 +10,10 @@ Cargo.lock
 # Project-scoped MCP config: machine-specific store path. Keep out of source control.
 .mcp.json
 
-# noha (the emerge audit engine): project-local binaries + cargo-install metadata are a
-# local install, not source. Recreate them with:
-#   cargo install --path <emerge>/core --root .noha --force
-# The *policy* — noha.yaml and the ratchet baseline .noha/baseline.tsv — IS tracked; it
-# is what makes a green build mean something.
-/.noha/bin/
-/.noha/.crates.toml
-/.noha/.crates2.json
-# TIA is a learned local cache (regenerated on demand); the baseline is the source of truth.
-/.noha/tia.tsv
-
-# sota-scan output — competitor names, never ship
+# Benchmark-scan output — kept local, never published or committed.
 .sota/
 
-# Quality-gate config + baseline — kept local, never published or committed
+# The local mutation-coverage gate's config, baseline, and binaries — a per-machine dev
+# install, not source. Kept on disk to run the gate locally; never published or committed.
 .noha/
 noha.yaml

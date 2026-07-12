@@ -134,11 +134,11 @@ guarantee above still holds, and the memory logic stays mutation-pinned.
 
 ## Documentation
 
-- [`docs/DESIGN.md`](docs/DESIGN.md) — the full architecture, threat model, and phased build plan.
+- [`docs/DESIGN.md`](docs/DESIGN.md) — the architecture, threat model, and phased build plan
+  (a historical proposal; see the banner at its top).
 - [`docs/adr/`](docs/adr/) — the architecture decisions: the dependency budget (0020), the egress
-  wall (0021), memory-augmented self-evolution (0022), and whole-store-seal persistence (0024).
-- [`docs/NARRATIVE.md`](docs/NARRATIVE.md) — the story of building it under a mutation ratchet.
-- [`docs/README.md`](docs/README.md) — how to read the docs (and where cross-references point).
+  wall (0021), the embedder-width invariant (0023), whole-store-seal persistence (0024), and the
+  MCP server (0025).
 
 ## Correctness
 
