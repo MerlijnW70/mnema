@@ -688,6 +688,68 @@ mod tests {
         assert_eq!(EpisodicLog::decode(&buf), Err(StoreError::Truncated));
     }
 
+    /// A tiny deterministic PRNG (SplitMix64) so the fuzz test is reproducible and dependency-free.
+    struct Rng(u64);
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn byte(&mut self) -> u8 {
+            (self.next_u64() >> 56) as u8
+        }
+        /// A value in `0..=n`.
+        fn upto(&mut self, n: usize) -> usize {
+            (self.next_u64() % (n as u64 + 1)) as usize
+        }
+    }
+
+    #[test]
+    fn decode_and_open_never_panic_on_hostile_bytes() {
+        // The parse path reads bytes that can be fully attacker-controlled — `open` reads a
+        // `.store` file's header (`split_sealed`) *before* the AEAD authenticates anything, so a
+        // malicious store file hits it directly. The only acceptable outcomes are a clean `Ok` or
+        // a clean `Err` — never a panic (out-of-bounds slice, overflow, unwrap on None).
+        let mut rng = Rng(0x1234_5678_9ABC_DEF0);
+        let valid_plain = sample().encode();
+
+        // Hammer the plaintext PARSER — pure parsing, cheap — over random and corrupted-valid
+        // bytes spanning the header and length-prefix boundaries.
+        for _ in 0..20_000 {
+            let n = rng.upto(80);
+            let random: Vec<u8> = (0..n).map(|_| rng.byte()).collect();
+            let _ = EpisodicLog::decode(&random); // Ok or Err, never a panic
+
+            let mut plain = valid_plain.clone();
+            if !plain.is_empty() {
+                let i = rng.upto(plain.len() - 1);
+                plain[i] ^= rng.byte() | 1; // guaranteed to change the byte
+            }
+            plain.truncate(rng.upto(plain.len()));
+            let _ = EpisodicLog::decode(&plain);
+        }
+
+        // Fuzz the pre-auth header parse + AEAD rejection through `open`. `open` runs the
+        // memory-hard KDF once the header is well-formed, so keep this loop short: a few dozen
+        // inputs cover split_sealed's length/version branches and confirm that a corrupted seal
+        // always fails — never panics, never yields a log.
+        let valid_sealed = sample().seal(b"pw").unwrap();
+        for _ in 0..16 {
+            let n = rng.upto(60); // usually a malformed header → rejected before the KDF
+            let random: Vec<u8> = (0..n).map(|_| rng.byte()).collect();
+            assert!(EpisodicLog::open(&random, b"pw").is_err());
+
+            let mut sealed = valid_sealed.clone();
+            let i = rng.upto(sealed.len() - 1);
+            sealed[i] ^= rng.byte() | 1;
+            sealed.truncate(rng.upto(sealed.len()));
+            assert!(EpisodicLog::open(&sealed, b"pw").is_err());
+        }
+    }
+
     #[test]
     fn forget_hard_deletes_matching_events_and_receipts_them() {
         let mut log = sample(); // ids 0,1,2
