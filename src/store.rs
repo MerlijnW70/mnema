@@ -31,7 +31,10 @@ const NONCE_LEN: usize = 24;
 /// and dispatches at `open` time; a blob whose first byte is a version this build does not
 /// understand is **rejected, never guessed**. Adding the byte now — before any real store
 /// exists — is what makes those migrations possible later without silently mis-decoding.
-const FORMAT_VERSION: u8 = 1;
+// v2 (from v1): the episodic log now persists its `next_id` counter, and byte-string length
+// prefixes widened from u32 to u64 (so no field or nested blob can silently truncate). A v1
+// blob is rejected with `UnknownVersion` rather than mis-decoded under the new layout.
+const FORMAT_VERSION: u8 = 2;
 const VERSION_LEN: usize = 1;
 /// The fixed prefix before the ciphertext: `version(1) || salt(16) || nonce(24)`.
 const HEADER_LEN: usize = VERSION_LEN + SALT_LEN + NONCE_LEN;
@@ -123,9 +126,12 @@ fn argon2() -> Result<Argon2<'static>, StoreError> {
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
-/// Append a length-prefixed byte string (`u32` LE length, then the bytes).
+/// Append a length-prefixed byte string (`u64` LE length, then the bytes). The prefix is `u64`
+/// so it losslessly holds any `usize` length — a `u32` prefix silently truncated a field (or the
+/// nested episodic/facts blob) of 4 GiB+ modulo 2^32 while still writing every byte, desyncing
+/// the record stream on decode. `usize`→`u64` never truncates on any target.
 pub(crate) fn put_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     buf.extend_from_slice(bytes);
 }
 
@@ -266,9 +272,12 @@ impl EpisodicLog {
         self.events.iter().rev().take(k).collect()
     }
 
-    /// Serialize every record into the plaintext wire format (pre-encryption).
+    /// Serialize the log into the plaintext wire format (pre-encryption): the `next_id` counter
+    /// first, then every record. Persisting `next_id` is what keeps a forgotten id from ever being
+    /// reissued across seal→open (see [`decode`](EpisodicLog::decode)).
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&self.next_id.to_le_bytes());
         for e in &self.events {
             buf.extend_from_slice(&e.id.to_le_bytes());
             buf.push(kind_tag(e.kind));
@@ -281,14 +290,14 @@ impl EpisodicLog {
         buf
     }
 
-    /// Parse the plaintext wire format back into a log. Every read goes through
-    /// [`take_slice`], which returns [`StoreError::Truncated`] rather than
-    /// index-panicking, so there is no fragile size constant to keep in sync and
-    /// every offset advance is a mutation target the round-trip + truncation tests
-    /// pin — a mutant that mis-bounds a read yields the wrong `Result`, not a panic.
+    /// Parse the plaintext wire format back into a log: the persisted `next_id`, then the records.
+    /// Every read goes through [`take_slice`], which returns [`StoreError::Truncated`] rather than
+    /// index-panicking, so there is no fragile size constant to keep in sync and every offset
+    /// advance is a mutation target the round-trip + truncation tests pin — a mutant that
+    /// mis-bounds a read yields the wrong `Result`, not a panic.
     pub(crate) fn decode(buf: &[u8]) -> Result<Self, StoreError> {
+        let (next_id, mut off) = take_u64(buf, 0)?;
         let mut events = Vec::new();
-        let mut off = 0usize;
         while off < buf.len() {
             let (id, o) = take_u64(buf, off)?;
             let (kind_byte, o) = take_u8(buf, o)?;
@@ -308,9 +317,10 @@ impl EpisodicLog {
                 redacted: string_from(redacted)?,
             });
         }
-        // Resume the id sequence past the highest surviving id, so a compacted-then-
-        // reopened log never reissues a forgotten id.
-        let next_id = events.iter().map(|e| e.id).max().map_or(0, |m| m + 1);
+        // next_id is read from the stream, not rebuilt from max(id)+1: forgetting the highest id
+        // (or the last memory) would rewind a max-derived counter and reissue that id on the next
+        // append, so a stale reference — a `reinforce(id)` or a rendered "[id]" — would silently
+        // resolve to a different, newer memory. The persisted counter never rewinds.
         Ok(Self { events, next_id })
     }
 
@@ -503,10 +513,14 @@ pub(crate) fn take_f32(buf: &[u8], off: usize) -> Result<(f32, usize), StoreErro
     Ok((f32::from_le_bytes(s.try_into().unwrap()), next))
 }
 
-/// Read a length-prefixed byte string at `off`: a `u32` LE length, then its bytes.
+/// Read a length-prefixed byte string at `off`: a `u64` LE length, then its bytes. The length is
+/// `usize::try_from`'d (not `as usize`) so a `u64` length that cannot fit this target's `usize`
+/// (a 64-bit-written store read on a 32-bit target) is a clean [`StoreError::Truncated`], not a
+/// wrapped-small length that would slice the wrong bytes.
 pub(crate) fn take_bytes(buf: &[u8], off: usize) -> Result<(&[u8], usize), StoreError> {
-    let (len, body) = take_u32(buf, off)?;
-    take_slice(buf, body, len as usize)
+    let (len, body) = take_u64(buf, off)?;
+    let n = usize::try_from(len).map_err(|_| StoreError::Truncated)?;
+    take_slice(buf, body, n)
 }
 
 pub(crate) fn string_from(bytes: &[u8]) -> Result<String, StoreError> {
@@ -683,9 +697,26 @@ mod tests {
             log.append(MemoryKind::Episodic, EgressTier::Open, 1, "hi");
             log.encode()
         };
-        // content_len sits after id(8)+kind(1)+tier(1)+at(8)+importance(4) = offset 22.
-        buf[22..26].copy_from_slice(&u32::MAX.to_le_bytes());
+        // content_len (u64) sits after next_id(8)+id(8)+kind(1)+tier(1)+at(8)+importance(4) = 30.
+        buf[30..38].copy_from_slice(&u64::MAX.to_le_bytes());
         assert_eq!(EpisodicLog::decode(&buf), Err(StoreError::Truncated));
+    }
+
+    #[test]
+    fn next_id_survives_seal_open_so_a_forgotten_top_id_is_never_reissued() {
+        // The bug this pins: a max-derived next_id rewinds when the highest id is forgotten.
+        let mut log = EpisodicLog::new();
+        log.append(MemoryKind::Episodic, EgressTier::Open, 1, "a"); // id 0
+        log.append(MemoryKind::Episodic, EgressTier::Open, 2, "b"); // id 1
+        log.forget(|m| m.id == 1); // forget the HIGHEST id
+        // Round-trip through the sealed format (the path where next_id used to be rebuilt).
+        let reopened = EpisodicLog::open(&log.seal(b"pw").unwrap(), b"pw").unwrap();
+        let fresh = {
+            let mut r = reopened;
+            r.append(MemoryKind::Episodic, EgressTier::Open, 3, "c")
+        };
+        // Must be 2, not a reissued 1 — the persisted counter did not rewind to max(0)+1.
+        assert_eq!(fresh, 2);
     }
 
     /// A tiny deterministic PRNG (SplitMix64) so the fuzz test is reproducible and dependency-free.
@@ -849,7 +880,8 @@ mod tests {
     #[test]
     fn an_unknown_tag_byte_is_rejected() {
         let mut buf = sample().encode();
-        buf[8] = 0x7F; // the first record's kind tag → out of range
+        // next_id(8) then the first record's id(8); its kind tag is at offset 16.
+        buf[16] = 0x7F; // out of range
         assert_eq!(EpisodicLog::decode(&buf), Err(StoreError::UnknownTag));
     }
 }
