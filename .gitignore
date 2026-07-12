@@ -10,20 +10,10 @@ Cargo.lock
 # Project-scoped MCP config: machine-specific store path. Keep out of source control.
 .mcp.json
 
-# internal-tool (the emerge audit engine): project-local binaries + cargo-install metadata are a
-# local install, not source. Recreate them with:
-#   cargo install --path <emerge>/core --root .internal-tool --force
-# The *policy* — internal-tool.yaml and the ratchet baseline .internal-tool/baseline.tsv — IS tracked; it
-# is what makes a green build mean something.
-/.internal-tool/bin/
-/.internal-tool/.crates.toml
-/.internal-tool/.crates2.json
-# TIA is a learned local cache (regenerated on demand); the baseline is the source of truth.
-/.internal-tool/tia.tsv
-
-# sota-scan output — competitor names, never ship
+# Benchmark-scan output — kept local, never published or committed.
 .sota/
 
-# Quality-gate config + baseline — kept local, never published or committed
+# The local mutation-coverage gate's config, baseline, and binaries — a per-machine dev
+# install, not source. Kept on disk to run the gate locally; never published or committed.
 .internal-tool/
 internal-tool.yaml
