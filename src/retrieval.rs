@@ -13,7 +13,7 @@
 //! Pure safe Rust, zero dependencies (ADR-0007 holds).
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::vector::{Embedder, VectorIndex};
 use crate::{BundleItem, Destination, Memory, MemoryId};
@@ -145,16 +145,16 @@ fn bm25_term_score(tf: f32, df: f32, n: f32, dl: f32, avgdl: f32) -> f32 {
     idf * norm
 }
 
-/// Rank memories by **BM25** relevance to `query` — a rare query term outweighs a common one
-/// (IDF), extra repetitions of a term give diminishing returns (`k1`), and a hit in a short
-/// memory outweighs the same hit in a long one (`b`). Only memories containing at least one
-/// query term are returned; ties keep input order (the sort is stable).
 /// Mean document length over the corpus, floored at `1.0` so BM25's length term stays finite
 /// on a degenerate all-empty corpus (where, having no term matches, it is never consulted).
 fn avg_len(total_len: usize, n: f32) -> f32 {
     (total_len as f32 / n).max(1.0)
 }
 
+/// Rank memories by **BM25** relevance to `query` — a rare query term outweighs a common one
+/// (IDF), extra repetitions of a term give diminishing returns (`k1`), and a hit in a short
+/// memory outweighs the same hit in a long one (`b`). Only memories containing at least one
+/// query term are returned; ties keep input order (the sort is stable).
 pub fn bm25_rank(query: &str, memories: &[Memory]) -> Vec<MemoryId> {
     let mut q_terms = tokenize(query);
     q_terms.sort();
@@ -202,6 +202,41 @@ fn tokenize(text: &str) -> Vec<String> {
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// A memory at least this token-Jaccard-similar to an already-selected one is treated as a
+/// near-duplicate and dropped from recall. Conservative — only near-identical memories are
+/// suppressed, so distinct-but-related memories still surface.
+const DEDUP_THRESHOLD: f32 = 0.8;
+
+/// Token-set Jaccard similarity of two texts, in `[0, 1]`: `|shared tokens| / |all tokens|`.
+/// Two empty texts are defined as identical (`1.0`).
+fn content_similarity(a: &str, b: &str) -> f32 {
+    let ta: BTreeSet<String> = tokenize(a).into_iter().collect();
+    let tb: BTreeSet<String> = tokenize(b).into_iter().collect();
+    if ta.is_empty() && tb.is_empty() {
+        return 1.0;
+    }
+    let intersection = ta.intersection(&tb).count() as f32;
+    let union = ta.len() as f32 + tb.len() as f32 - intersection;
+    intersection / union
+}
+
+/// Suppress near-duplicate memories from a relevance-ordered list: keep a memory only if it is
+/// less than `threshold` similar (token Jaccard) to every memory already kept, so the recall
+/// budget is not spent on repeats. Order is preserved — the first (most relevant) of a
+/// near-duplicate pair wins.
+fn dedup_similar<'a>(ordered: &[&'a Memory], threshold: f32) -> Vec<&'a Memory> {
+    let mut kept: Vec<&Memory> = Vec::new();
+    for &m in ordered {
+        let is_dup = kept
+            .iter()
+            .any(|k| content_similarity(&m.content, &k.content) >= threshold);
+        if !is_dup {
+            kept.push(m);
+        }
+    }
+    kept
 }
 
 /// Hybrid recall: embed the query, gather the top `per_retriever` ids from each of the
@@ -301,7 +336,10 @@ pub fn fuse_and_pack(
         .filter_map(|f| by_id.get(&f.id).copied())
         .collect();
 
-    super::pack_bundle(&ordered, dest, char_budget)
+    // Suppress near-duplicate memories so the budget isn't spent on repeats (diversity),
+    // then pack the survivors through the egress choke point.
+    let diverse = dedup_similar(&ordered, DEDUP_THRESHOLD);
+    super::pack_bundle(&diverse, dest, char_budget)
 }
 
 #[cfg(test)]
@@ -434,6 +472,38 @@ mod tests {
     fn avg_len_is_the_mean_document_length_floored_at_one() {
         assert_eq!(avg_len(12, 2.0), 6.0);
         assert_eq!(avg_len(0, 3.0), 1.0); // floored to 1.0, never 0 (keeps the length term finite)
+    }
+
+    #[test]
+    fn content_similarity_is_token_jaccard() {
+        assert_eq!(content_similarity("a b c", "a b c"), 1.0); // identical
+        assert_eq!(content_similarity("a b c", "x y z"), 0.0); // disjoint
+        assert_eq!(content_similarity("a b c", "b c d"), 0.5); // {b,c} / {a,b,c,d}
+        assert_eq!(content_similarity("", ""), 1.0); // both empty → identical
+        assert_eq!(content_similarity("", "a"), 0.0); // one empty
+    }
+
+    #[test]
+    fn dedup_similar_drops_near_duplicates_keeping_the_first() {
+        let a = mem(1, EgressTier::Open, 3, "alpha beta gamma delta epsilon");
+        let b = mem(2, EgressTier::Open, 2, "epsilon delta gamma beta alpha"); // same token set
+        let c = mem(3, EgressTier::Open, 1, "one two three four five"); // distinct
+        let ordered = vec![&a, &b, &c];
+        let kept: Vec<MemoryId> = dedup_similar(&ordered, DEDUP_THRESHOLD)
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(kept, vec![1, 3]); // 2 is a near-duplicate of 1; 3 survives
+
+        // A threshold above 1.0 keeps everything.
+        let all: Vec<MemoryId> = dedup_similar(&ordered, 1.01).iter().map(|m| m.id).collect();
+        assert_eq!(all, vec![1, 2, 3]);
+
+        // At an exact-1.0 threshold, identical content IS a duplicate (`>=`, not `>`).
+        let d = mem(4, EgressTier::Open, 1, "same words here");
+        let e = mem(5, EgressTier::Open, 1, "same words here");
+        let kept2: Vec<MemoryId> = dedup_similar(&[&d, &e], 1.0).iter().map(|m| m.id).collect();
+        assert_eq!(kept2, vec![4]);
     }
 
     #[test]
