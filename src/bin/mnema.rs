@@ -180,8 +180,16 @@ fn main() {
             }
         }
         ("stats", 2) => {
-            let mem = load(&args[1]);
-            println!("memories: {}  indexed: {}", mem.len(), mem.indexed());
+            let s = load(&args[1]).stats();
+            println!(
+                "memories: {} (open {}, redacted {}, private {})",
+                s.total, s.open, s.redacted, s.private
+            );
+            println!(
+                "beliefs: {} live ({} private)",
+                s.beliefs, s.private_beliefs
+            );
+            println!("indexed: {}", s.indexed);
         }
         ("prune", 4) => {
             let store = &args[1];
