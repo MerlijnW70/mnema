@@ -7,7 +7,7 @@
 //! Gated behind the `secure` feature (ADR-0020): the crypto dependencies exist only
 //! when this compiles, so the evolution substrate and benches stay zero-dependency.
 //!
-//! The proof surface for noha is the **manual codec** ([`EpisodicLog::encode`] /
+//! The proof surface for mutation testing is the **manual codec** ([`EpisodicLog::encode`] /
 //! [`decode`]): pure, deterministic offset arithmetic where every `+`, `<`, and `>`
 //! is a mutation target. A mutant that miscounts an offset or a length must break a
 //! round-trip test below — that is what makes "the bytes survive encryption intact"

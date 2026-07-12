@@ -1,5 +1,5 @@
-# Pin the toolchain so a plain `cargo` (what noha's gate invokes) resolves to a
+# Pin the toolchain so a plain `cargo` (what the quality gate invokes) resolves to a
 # working compiler. mnema is edition 2024 — it needs Rust ≥ 1.85. 1.96 is the
-# floor we build and gate against; the noha mutation ratchet runs under it too.
+# floor we build and gate against; the mutation gate runs under it too.
 [toolchain]
 channel = "1.96"

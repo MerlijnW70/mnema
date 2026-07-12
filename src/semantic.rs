@@ -13,7 +13,7 @@
 //! - **contradicts but is stale** (older than the live belief) → keep it as history
 //!   only; the fresher belief stands.
 //!
-//! The load-bearing, noha-pinned invariant — the same shape as ADR-0021's egress rule
+//! The load-bearing, mutation-pinned invariant — the same shape as ADR-0021's egress rule
 //! — is: **at most one *live* fact per `(subject, attribute)`, ever.** A mutant that
 //! leaves two live, or lets a stale fact win, must break a test below. Pure safe Rust,
 //! zero dependencies (ADR-0007 holds; no `secure` feature needed).
