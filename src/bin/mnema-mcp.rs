@@ -121,13 +121,14 @@ fn tools_list() -> Value {
     json!({ "tools": [
         {
             "name": "remember",
-            "description": "Store a memory. 'tier' controls egress: a 'private' memory is never returned to a remote/cloud model. 'importance' makes a memory rank higher in recall and resist forgetting.",
+            "description": "Store a memory. 'tier' controls egress: a 'private' memory is never returned to a remote/cloud model. 'importance' makes a memory rank higher in recall and resist forgetting. For a 'redacted' memory, 'redacted' is the sanitized surface a remote model sees in place of the full content.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "content": { "type": "string", "description": "the memory text to store" },
                     "tier": { "type": "string", "enum": ["open", "redacted", "private"], "description": "egress tier (default: open)" },
-                    "importance": { "type": "number", "description": "how salient this memory is (default 1.0); higher ranks higher in recall" }
+                    "importance": { "type": "number", "description": "how salient this memory is (default 1.0); higher ranks higher in recall" },
+                    "redacted": { "type": "string", "description": "for a 'redacted' memory, the sanitized text a remote model sees instead of the content (a redacted memory with no surface reveals nothing remotely)" }
                 },
                 "required": ["content"]
             }
@@ -258,7 +259,9 @@ fn handle_tool_call<E: Embedder>(
                 .get("importance")
                 .and_then(Value::as_f64)
                 .unwrap_or(1.0) as f32;
-            let id = store.remember_important(tier, importance, &content);
+            // The redacted surface only bites on the redacted tier; empty for open/private.
+            let redacted = arg_str("redacted");
+            let id = store.remember_with(tier, importance, &content, &redacted);
             persist(store, path, key);
             format!("remembered as memory {id}")
         }
