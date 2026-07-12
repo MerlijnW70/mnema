@@ -386,17 +386,25 @@ fn persist<E: Embedder>(store: &mut Mnema<E>, path: &str, key: &[u8]) {
     }
 }
 
-/// Open the store at `path`, or start a fresh one if there is no file yet or it will not open.
-/// `make` builds the embedder; it is a factory (not a value) because `open` consumes the
-/// embedder, so the fresh-start fallback needs a second one — and a model-backed embedder is
-/// not `Clone`. The factory is called at most twice, and only on the rare unopenable-store path.
+/// Open the store at `path`, or start a fresh one **only if there is no file yet**. `make`
+/// builds the embedder; it is a factory (not a value) so the fresh-start branch can build one
+/// after `open` has consumed the first — a model-backed embedder is not `Clone`.
+///
+/// Critically: if the file *exists* but will not open (wrong `MNEMA_KEY`, a corrupt blob, or a
+/// newer on-disk format), we **refuse to start** rather than begin empty. Beginning empty would
+/// let the next [`persist`] overwrite — and destroy — the real store; for a memory product, a
+/// mistyped key must never mean silent data loss. The user fixes the key or moves the file.
 fn open_store<E: Embedder>(path: &str, key: &[u8], make: impl Fn() -> E) -> Mnema<E> {
     match std::fs::read(path) {
         Ok(blob) => match Mnema::open(&blob, key, make()) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("mnema-mcp: could not open {path} ({e:?}); starting a fresh store");
-                Mnema::new(make())
+                eprintln!(
+                    "mnema-mcp: {path} exists but could not be opened ({e:?}) — wrong MNEMA_KEY \
+                     or a corrupt/newer store. Refusing to start so your memory is not \
+                     overwritten. Fix the key, or move the file aside to begin fresh."
+                );
+                std::process::exit(1);
             }
         },
         Err(_) => Mnema::new(make()),
