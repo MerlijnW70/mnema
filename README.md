@@ -1,8 +1,13 @@
 # mnema
 
 [![CI](https://github.com/MerlijnW70/mnema/actions/workflows/ci.yml/badge.svg)](https://github.com/MerlijnW70/mnema/actions)
+![wasm](https://img.shields.io/badge/wasm-ready-8A2BE2.svg)
+![forbid(unsafe)](https://img.shields.io/badge/unsafe-forbidden-success.svg)
 
 **A fast, secure, local-first memory layer for LLMs — where every guarantee is proven, not asserted.**
+
+The zero-dependency core compiles to **WebAssembly**, so mnema can run entirely in a browser
+tab — memory that never leaves the device, no server round-trip.
 
 Most memory layers are a vector database with a nice API. `mnema` is built around the two things
 that actually matter and that most tools get wrong:
