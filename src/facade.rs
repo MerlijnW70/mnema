@@ -12,7 +12,7 @@
 //! Gated behind the `secure` feature (ADR-0020) because it builds on the encrypted
 //! episodic store. The retrieval and semantic primitives remain available without it.
 
-use crate::retrieval::{Decay, RetrievalWeights, fuse_and_pack, hybrid_recall};
+use crate::retrieval::{Decay, RetrievalWeights, fuse_and_pack, hybrid_recall, is_faded};
 use crate::semantic::{Fact, FactStatus, Resolution, SemanticStore};
 use crate::store::{
     EpisodicLog, PurgeReceipt, SealingKey, StoreError, put_bytes, string_from, take_bytes, take_u8,
@@ -346,6 +346,19 @@ impl<E: Embedder> Mnema<E> {
         self.episodic.reinforce(id)
     }
 
+    /// Forget every memory that has faded below `threshold` under the forgetting curve — its
+    /// `importance × 0.5^(age / half_life)` salience, with the facade's clock as *now*. This is
+    /// the counterpart to [`reinforce`](Mnema::reinforce): reinforcement keeps what the agent
+    /// uses, pruning sheds what it does not, so a long-lived store stays bounded instead of
+    /// growing forever. Hard-deletes through the same choke point as [`forget`](Mnema::forget)
+    /// (the vector index is kept in step and ids are never reused), and returns its
+    /// [`PurgeReceipt`]. A `half_life` of `0` prunes purely by importance; a `threshold` of
+    /// `0.0` prunes nothing.
+    pub fn prune_faded(&mut self, half_life: u64, threshold: f32) -> PurgeReceipt {
+        let now = self.clock;
+        self.forget(|m| is_faded(m.importance, now.saturating_sub(m.at), half_life, threshold))
+    }
+
     /// Number of stored episodic memories.
     pub fn len(&self) -> usize {
         self.episodic.len()
@@ -595,6 +608,38 @@ mod tests {
         // The forgotten memory can no longer be recalled.
         let hits = e.recall("dog", Destination::Local, 10, 1_000);
         assert!(hits.iter().all(|b| !b.text.contains("dog")));
+    }
+
+    #[test]
+    fn prune_faded_with_no_decay_sheds_by_importance_and_keeps_the_index_in_step() {
+        let mut e = Mnema::new(VowelEmbedder);
+        let dull = e.remember_important(EgressTier::Open, 0.5, "idle trivia"); // 0
+        let vital = e.remember_important(EgressTier::Open, 5.0, "the dog plan"); // 1
+        assert_eq!(e.len(), 2);
+        // half_life 0 disables decay, so salience == importance. Cut at 1.0: 0.5 falls, 5.0 stays.
+        let receipt = e.prune_faded(0, 1.0);
+        assert_eq!(receipt.purged, vec![dull]);
+        assert_eq!(receipt.remaining, 1);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e.indexed(), 1); // the vector index tracked the delete
+        // The survivor — the important one — is still recallable.
+        let hits = e.recall("dog", Destination::Local, 10, 1_000);
+        assert!(hits.iter().any(|b| b.id == vital));
+    }
+
+    #[test]
+    fn prune_faded_uses_age_when_decay_is_on() {
+        let mut e = Mnema::new(VowelEmbedder);
+        let old = e.remember(EgressTier::Open, "first note"); // at=1
+        let recent = e.remember(EgressTier::Open, "second note"); // at=2; clock is now 2
+        // clock=2 → `old` is age 1, `recent` is age 0. With half_life 1 the weights are
+        // 0.5 and 1.0; a 0.75 cutoff drops the aged one and keeps the fresh one. This pins
+        // the `now - at` direction: computing `at - now` would age neither and prune nothing.
+        let receipt = e.prune_faded(1, 0.75);
+        assert_eq!(receipt.purged, vec![old]);
+        assert_eq!(receipt.remaining, 1);
+        let survivors: Vec<MemoryId> = e.recall_by_recency(10).iter().map(|b| b.id).collect();
+        assert_eq!(survivors, vec![recent]);
     }
 
     #[test]

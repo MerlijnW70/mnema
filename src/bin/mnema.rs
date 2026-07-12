@@ -19,6 +19,7 @@
 //!   mnema fact     <store> <subject> <attribute> <value>       # prints the resolution
 //!   mnema recall   <store> <k> <query>                         # prints k memories
 //!   mnema stats    <store>
+//!   mnema prune    <store> <half_life> <threshold>             # forget faded memories
 //!   mnema rekey    <store>   # $MNEMA_KEY = old passphrase; re-seals under a new keyfile
 
 use std::path::{Path, PathBuf};
@@ -182,9 +183,26 @@ fn main() {
             let mem = load(&args[1]);
             println!("memories: {}  indexed: {}", mem.len(), mem.indexed());
         }
+        ("prune", 4) => {
+            let store = &args[1];
+            let half_life: u64 = args[2]
+                .parse()
+                .unwrap_or_else(|_| die("half_life must be a number"));
+            let threshold: f32 = args[3]
+                .parse()
+                .unwrap_or_else(|_| die("threshold must be a number"));
+            let mut mem = load(store);
+            let receipt = mem.prune_faded(half_life, threshold);
+            save(store, &mut mem);
+            println!(
+                "pruned {}  remaining {}",
+                receipt.purged.len(),
+                receipt.remaining
+            );
+        }
         ("rekey", 2) => rekey(&args[1]),
         _ => die(
-            "usage: mnema remember|recall|fact|stats|rekey <store> ...  (see the source header)",
+            "usage: mnema remember|recall|fact|stats|prune|rekey <store> ...  (see the source header)",
         ),
     }
 }
