@@ -1,8 +1,10 @@
 /target
 Cargo.lock
 
-# Mnema stores are encrypted, machine-specific data — never source.
+# Mnema stores are encrypted, machine-specific data — never source. `*.store` covers the
+# CLI/MCP default filename (`mnema.store`); `*.mnema` covers the documented extension.
 *.mnema
+*.store
 
 # Per-store key: the random secret that seals the sibling *.mnema. NEVER source.
 *.key
