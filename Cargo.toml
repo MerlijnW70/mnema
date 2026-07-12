@@ -3,9 +3,9 @@ name = "mnema"
 version = "0.1.1"
 edition = "2024"
 repository = "https://github.com/MerlijnW70/mnema"
-description = "A fast, secure, local-first memory layer for LLMs — four memory types, contradiction-resolving writes, injection-resistant retrieval, encrypted at rest."
+description = "A local, encrypted memory layer for AI agents — never forgets, never leaks to the cloud."
 license = "MIT OR Apache-2.0"
-keywords = ["memory", "llm", "ai", "vector", "local-first"]
+keywords = ["memory", "agent", "llm", "mcp", "local-first"]
 categories = ["data-structures", "database-implementations"]
 # Development-only directories that must never ship in the published crate (design/ADR docs
 # and dev scripts). The quality-gate config and scan output are kept out of version control
