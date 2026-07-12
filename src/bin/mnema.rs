@@ -33,7 +33,7 @@ use mnema::keyfile::{self, generate_keyfile, keyfile_path};
 use mnema::{Destination, EgressTier};
 
 /// The default embedder's width, pinned once in the library so this CLI and the
-/// `mnema-mcp` server — which share a store family — can never embed at different
+/// `mnema-server` server — which share a store family — can never embed at different
 /// widths and corrupt each other's recall.
 const DIMS: usize = HashEmbedder::DEFAULT_DIMS;
 
@@ -78,7 +78,7 @@ fn save(store: &str, mem: &mut Mnema<HashEmbedder>) {
 /// Take an exclusive advisory lock for the store via a sibling `<store>.lock`, returning the held
 /// `File` (drop to release; the OS releases on exit). A write command holds this across its
 /// load→mutate→save so it can't clobber, or be clobbered by, a concurrent writer (another `mnema`
-/// or a running `mnema-mcp`). Read-only commands don't lock — writes are atomic, so a reader sees
+/// or a running `mnema-server`). Read-only commands don't lock — writes are atomic, so a reader sees
 /// the whole old or whole new store, never a torn one.
 fn lock_store(store: &str) -> std::fs::File {
     let lockpath = format!("{store}.lock");

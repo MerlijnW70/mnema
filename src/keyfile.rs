@@ -1,4 +1,4 @@
-//! Per-store key resolution, shared by the `mnema` CLI and the `mnema-mcp` server.
+//! Per-store key resolution, shared by the `mnema` CLI and the `mnema-server` server.
 //!
 //! The key is per-store, resolved in this order (never on the command line):
 //!   1. `$MNEMA_KEY` if set and non-empty — an explicit passphrase (shared stores, CI, env-only

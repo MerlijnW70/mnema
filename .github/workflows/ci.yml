@@ -19,7 +19,7 @@ jobs:
       # The mutation gate's own guard: the library under `secure`.
       - run: cargo clippy --all-targets --features secure -- -D warnings
       # The MCP server binary under its feature.
-      - run: cargo clippy --bin mnema-mcp --features mcp -- -D warnings
+      - run: cargo clippy --bin mnema-server --features mcp -- -D warnings
 
   test:
     name: test · ${{ matrix.os }}
@@ -48,6 +48,6 @@ jobs:
       # The default build must stay zero-dependency (no features → core only).
       - run: cargo build
       # The MCP server must build under its feature.
-      - run: cargo build --features mcp --bin mnema-mcp
+      - run: cargo build --features mcp --bin mnema-server
       # The zero-dependency core must stay WebAssembly-compatible (browser / edge).
       - run: cargo build --target wasm32-unknown-unknown

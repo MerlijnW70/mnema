@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.ps1 | iex
 Other ways: **with Rust**, `cargo install --git https://github.com/MerlijnW70/mnema mnema --features mcp`
 · or **download a binary** for your OS from the [latest release](https://github.com/MerlijnW70/mnema/releases/latest).
 
-You get two commands: `mnema` (the CLI) and `mnema-mcp` (the server your AI editor talks to).
+You get two commands: `mnema` (the CLI) and `mnema-server` (the server your AI editor talks to).
 
 ## Try it in 30 seconds
 
@@ -46,15 +46,15 @@ Add mnema to your MCP client (Cursor, Claude Desktop, Claude Code) — that's th
 {
   "mcpServers": {
     "mnema": {
-      "command": "mnema-mcp",
-      "env": { "MNEMA_PATH": "~/mnema.store" }
+      "command": "mnema-server",
+      "args": ["--path", "~/mnema.store"]
     }
   }
 }
 ```
 
 Your agent now has `remember`, `recall`, `recent`, and more. Everything stays on your disk, encrypted.
-(If `mnema-mcp` isn't on your `PATH`, use the absolute path the installer printed.)
+(If `mnema-server` isn't on your `PATH`, use the absolute path the installer printed.)
 
 ## Why mnema
 

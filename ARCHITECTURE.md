@@ -125,7 +125,7 @@ contradiction-resolving writes, the egress filter, and the encrypted store all h
 |---|---|
 | *(none)* | the zero-dependency core: retrieval, semantic, working, vector, egress |
 | `secure` | encryption at rest (Argon2id + XChaCha20-Poly1305), the `Mnema` facade, the `mnema` CLI |
-| `mcp` | the `mnema-mcp` server (implies `secure`) |
+| `mcp` | the `mnema-server` server (implies `secure`) |
 | `local-embed` | the bundled semantic embedder (all-MiniLM-L6-v2 via candle) |
 
 ## License

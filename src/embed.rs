@@ -22,7 +22,7 @@ pub struct HashEmbedder {
 impl HashEmbedder {
     /// The canonical width for the built-in default embedder, and the single source of
     /// truth for it. Every process that touches one store family — the `mnema` CLI and
-    /// the `mnema-mcp` server both do — must embed at the *same* width: a query vector
+    /// the `mnema-server` server both do — must embed at the *same* width: a query vector
     /// of a different length than the stored vectors makes cosine similarity meaningless
     /// and silently corrupts recall. Pinning it here, rather than as a private `const` in
     /// each binary, makes that agreement structural instead of a convention two crates can

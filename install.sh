@@ -1,5 +1,5 @@
 #!/bin/sh
-# mnema installer — downloads prebuilt `mnema` (CLI) and `mnema-mcp` (MCP server) binaries.
+# mnema installer — downloads prebuilt `mnema` (CLI) and `mnema-server` (MCP server) binaries.
 # No Rust toolchain required.
 #
 #   curl -fsSL https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.sh | sh
@@ -57,11 +57,11 @@ tar xzf "$tmp/mnema.tar.gz" -C "$tmp"
 mkdir -p "$BIN_DIR"
 src="$tmp/mnema-${tag}-${target}"
 install -m 0755 "$src/mnema" "$BIN_DIR/mnema"
-install -m 0755 "$src/mnema-mcp" "$BIN_DIR/mnema-mcp"
+install -m 0755 "$src/mnema-server" "$BIN_DIR/mnema-server"
 
 echo "Installed mnema $tag to $BIN_DIR:"
 echo "  $BIN_DIR/mnema        (CLI)"
-echo "  $BIN_DIR/mnema-mcp    (MCP server)"
+echo "  $BIN_DIR/mnema-server    (MCP server)"
 
 case ":$PATH:" in
 *":$BIN_DIR:"*) ;;
@@ -75,8 +75,8 @@ Point your MCP client at the server (it creates + encrypts the store on first us
   {
     \"mcpServers\": {
       \"mnema\": {
-        \"command\": \"$BIN_DIR/mnema-mcp\",
-        \"env\": { \"MNEMA_PATH\": \"$HOME/mnema.store\" }
+        \"command\": \"$BIN_DIR/mnema-server\",
+        \"args\": [\"--path\", \"$HOME/mnema.store\"]
       }
     }
   }
