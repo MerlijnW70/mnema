@@ -37,14 +37,17 @@ jobs:
       - run: cargo test --features secure
 
   build:
-    name: zero-dep core + mcp binary
+    name: zero-dep core · mcp binary · wasm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.96"
+          targets: wasm32-unknown-unknown
       # The default build must stay zero-dependency (no features → core only).
       - run: cargo build
       # The MCP server must build under its feature.
       - run: cargo build --features mcp --bin mnema-mcp
+      # The zero-dependency core must stay WebAssembly-compatible (browser / edge).
+      - run: cargo build --target wasm32-unknown-unknown
