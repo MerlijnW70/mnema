@@ -11,20 +11,29 @@ never forgets — and never leaks to the cloud.
 
 ## Install
 
-**macOS / Linux** — no toolchain, no build:
+**Homebrew** (macOS / Linux):
+
+```bash
+brew install MerlijnW70/mnema/mnema
+```
+
+**With Rust**, any platform:
+
+```bash
+cargo install mnema --features mcp
+```
+
+**No toolchain, one line** — macOS / Linux, or Windows in PowerShell:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.sh | sh
 ```
 
-**Windows** (PowerShell):
-
 ```powershell
 irm https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.ps1 | iex
 ```
 
-Other ways: **with Rust**, `cargo install --git https://github.com/MerlijnW70/mnema mnema --features mcp`
-· or **download a binary** for your OS from the [latest release](https://github.com/MerlijnW70/mnema/releases/latest).
+Or **download a binary** for your OS from the [latest release](https://github.com/MerlijnW70/mnema/releases/latest).
 
 You get two commands: `mnema` (the CLI) and `mnema-server` (the server your AI editor talks to).
 
