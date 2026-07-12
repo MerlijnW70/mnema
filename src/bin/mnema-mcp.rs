@@ -12,11 +12,21 @@
 //! but every real decision — the egress wall, contradiction resolution, packing — lives in the
 //! mutation-pinned [`mnema`] facade. Notably, `recall` runs against `Destination::Remote`, so a
 //! `Private` memory can never leave through this tool.
+//!
+//! ## Embedder
+//!
+//! By default recall rides the zero-dependency [`HashEmbedder`] (a lexical bag-of-tokens vector).
+//! Built with `--features mcp,local-embed`, it instead loads the in-process semantic embedder
+//! (`all-MiniLM-L6-v2` via candle), so recall matches on *meaning*, not just shared words. The
+//! choice is fixed at compile time; a store is embedder-specific (the widths differ), so a given
+//! binary always opens the store it wrote.
 
 use std::io::{BufRead, Write};
 
+#[cfg(not(feature = "local-embed"))]
 use mnema::embed::HashEmbedder;
 use mnema::facade::Mnema;
+use mnema::vector::Embedder;
 use mnema::{BundleItem, Destination, EgressTier};
 use serde_json::{Value, json};
 
@@ -30,7 +40,25 @@ fn main() {
         eprintln!("mnema-mcp: MNEMA_KEY is empty — set a passphrase to encrypt the store at rest");
     }
 
-    let mut store = load_store(&path, key.as_bytes());
+    // The embedder is chosen at compile time. `serve` is generic over it, so the whole server
+    // is identical either way — only the vector arm of recall differs (lexical vs semantic).
+    #[cfg(feature = "local-embed")]
+    let store = open_store(&path, key.as_bytes(), || {
+        mnema::model_embed::MiniLmEmbedder::load().unwrap_or_else(|e| {
+            eprintln!("mnema-mcp: could not load the semantic model ({e})");
+            std::process::exit(1);
+        })
+    });
+    #[cfg(not(feature = "local-embed"))]
+    let store = open_store(&path, key.as_bytes(), || {
+        HashEmbedder::new(HashEmbedder::DEFAULT_DIMS)
+    });
+
+    serve(store, &path, key.as_bytes());
+}
+
+/// The JSON-RPC read/dispatch/persist loop, generic over the embedder in play.
+fn serve<E: Embedder>(mut store: Mnema<E>, path: &str, key: &[u8]) {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -53,7 +81,7 @@ fn main() {
             "initialize" => write_msg(&mut stdout, &reply(id, initialize_result())),
             "tools/list" => write_msg(&mut stdout, &reply(id, tools_list())),
             "tools/call" => {
-                let r = handle_tool_call(&mut store, &path, key.as_bytes(), req.get("params"));
+                let r = handle_tool_call(&mut store, path, key, req.get("params"));
                 write_msg(&mut stdout, &reply(id, r));
             }
             "ping" => write_msg(&mut stdout, &reply(id, json!({}))),
@@ -203,8 +231,8 @@ fn render_items(items: &[BundleItem]) -> String {
         .join("\n")
 }
 
-fn handle_tool_call(
-    store: &mut Mnema<HashEmbedder>,
+fn handle_tool_call<E: Embedder>(
+    store: &mut Mnema<E>,
     path: &str,
     key: &[u8],
     params: Option<&Value>,
@@ -338,7 +366,7 @@ fn parse_tier(s: Option<&str>) -> EgressTier {
     }
 }
 
-fn persist(store: &mut Mnema<HashEmbedder>, path: &str, key: &[u8]) {
+fn persist<E: Embedder>(store: &mut Mnema<E>, path: &str, key: &[u8]) {
     match store.seal(key) {
         Ok(blob) => {
             if let Err(e) = std::fs::write(path, blob) {
@@ -349,16 +377,19 @@ fn persist(store: &mut Mnema<HashEmbedder>, path: &str, key: &[u8]) {
     }
 }
 
-fn load_store(path: &str, key: &[u8]) -> Mnema<HashEmbedder> {
-    let dims = HashEmbedder::DEFAULT_DIMS;
+/// Open the store at `path`, or start a fresh one if there is no file yet or it will not open.
+/// `make` builds the embedder; it is a factory (not a value) because `open` consumes the
+/// embedder, so the fresh-start fallback needs a second one — and a model-backed embedder is
+/// not `Clone`. The factory is called at most twice, and only on the rare unopenable-store path.
+fn open_store<E: Embedder>(path: &str, key: &[u8], make: impl Fn() -> E) -> Mnema<E> {
     match std::fs::read(path) {
-        Ok(blob) => match Mnema::open(&blob, key, HashEmbedder::new(dims)) {
+        Ok(blob) => match Mnema::open(&blob, key, make()) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("mnema-mcp: could not open {path} ({e:?}); starting a fresh store");
-                Mnema::new(HashEmbedder::new(dims))
+                Mnema::new(make())
             }
         },
-        Err(_) => Mnema::new(HashEmbedder::new(dims)),
+        Err(_) => Mnema::new(make()),
     }
 }
