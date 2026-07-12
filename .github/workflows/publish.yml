@@ -1,0 +1,27 @@
+name: publish
+
+# Publish the current Cargo.toml version to crates.io from GitHub's clean network — useful when
+# your own network is behind a TLS-inspecting proxy that mangles the upload (a 406 from Fastly).
+#
+# One-time setup: add your crates.io token as a repo secret named CARGO_REGISTRY_TOKEN
+#   (Settings → Secrets and variables → Actions), or: gh secret set CARGO_REGISTRY_TOKEN
+# Then run it: Actions → publish → "Run workflow", or `gh workflow run publish.yml`.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
