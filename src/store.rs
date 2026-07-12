@@ -233,6 +233,19 @@ impl EpisodicLog {
         }
     }
 
+    /// Strengthen a memory against the forgetting curve: raise its `importance` by 1.0.
+    /// Returns whether a memory with `id` was found. A recalled, useful memory can be
+    /// reinforced so it ranks higher and fades slower — use it or lose it.
+    pub fn reinforce(&mut self, id: MemoryId) -> bool {
+        match self.events.iter_mut().find(|m| m.id == id) {
+            Some(m) => {
+                m.importance += 1.0;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Number of stored events.
     pub fn len(&self) -> usize {
         self.events.len()
@@ -694,6 +707,21 @@ mod tests {
         assert!(receipt.purged.is_empty());
         assert_eq!(receipt.remaining, 3);
         assert_eq!(log.len(), 3);
+    }
+
+    #[test]
+    fn reinforce_bumps_importance_and_reports_hit_or_miss() {
+        let mut log = EpisodicLog::new();
+        let id = log.append_important(MemoryKind::Episodic, EgressTier::Open, 1, 2.0, "a");
+        // A hit raises importance by exactly 1.0 (pins the `+= 1.0` arithmetic) and returns true.
+        assert!(log.reinforce(id));
+        assert_eq!(log.events()[0].importance, 3.0);
+        // Reinforcing again keeps accumulating — reinforcement is additive, not a one-shot flag.
+        assert!(log.reinforce(id));
+        assert_eq!(log.events()[0].importance, 4.0);
+        // A miss touches nothing and returns false (pins the id match and the None arm).
+        assert!(!log.reinforce(999));
+        assert_eq!(log.events()[0].importance, 4.0);
     }
 
     #[test]
