@@ -32,10 +32,9 @@ goal as something we can actually defend:
 | 100% secure | **Encrypted at rest · injection-resistant retrieval · explicit egress control · auditable · true hard-delete** | "100% secure" is unfalsifiable marketing. A concrete threat model is defensible. |
 | World-class / unmatched | **Provably-tested memory logic (noha) + zero-`unsafe` Rust + local-first** | The moat is *correctness we can prove*, not feature count. No competitor has this. |
 
-**The one differentiator that matters:** Mem0, Zep, Letta/MemGPT, Cognee, and LangMem
-all already exist and all have "features." "Unmatched" cannot come from a longer
-feature list. It comes from the two things those tools do *badly* and we can do
-*provably*:
+**The one differentiator that matters:** plenty of agent-memory tools already exist and all
+have "features." "Unmatched" cannot come from a longer feature list. It comes from the two
+things those tools do *badly* and we can do *provably*:
 
 1. **Contradiction-resolving writes** — when a new fact conflicts with an old one,
    supersede it with provenance; don't accumulate both. Most tools just append.
