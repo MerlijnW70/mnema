@@ -20,3 +20,6 @@ Cargo.lock
 /.noha/.crates2.json
 # TIA is a learned local cache (regenerated on demand); the baseline is the source of truth.
 /.noha/tia.tsv
+
+# sota-scan output — competitor names, never ship
+.sota/
