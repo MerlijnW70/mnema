@@ -17,7 +17,7 @@ use std::io::{BufRead, Write};
 
 use mnema::embed::HashEmbedder;
 use mnema::facade::Mnema;
-use mnema::{Destination, EgressTier};
+use mnema::{BundleItem, Destination, EgressTier};
 use serde_json::{Value, json};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -112,9 +112,21 @@ fn tools_list() -> Value {
                 "properties": {
                     "query": { "type": "string" },
                     "k": { "type": "integer", "description": "max memories to return (default 5)" },
-                    "budget": { "type": "integer", "description": "max total characters (default 2000)" }
+                    "budget": { "type": "integer", "description": "max total characters (default 2000)" },
+                    "half_life": { "type": "integer", "description": "bias toward recent memories: salience halves every this-many stored memories of age (default 0 = importance only, no recency decay)" }
                 },
                 "required": ["query"]
+            }
+        },
+        {
+            "name": "recent",
+            "description": "List the most recently stored memories, newest first — the context an agent wants at the start of a session, no query needed. Private memories are filtered out.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "k": { "type": "integer", "description": "max memories to return (default 5)" },
+                    "budget": { "type": "integer", "description": "max total characters (default 2000)" }
+                }
             }
         },
         {
@@ -182,6 +194,15 @@ fn tool_text(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
 }
 
+/// Render a bundle as one `[id] text` line per item — the shared shape for `recall` and `recent`.
+fn render_items(items: &[BundleItem]) -> String {
+    items
+        .iter()
+        .map(|b| format!("[{}] {}", b.id, b.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn handle_tool_call(
     store: &mut Mnema<HashEmbedder>,
     path: &str,
@@ -217,17 +238,28 @@ fn handle_tool_call(
             let query = arg_str("query");
             let k = args.get("k").and_then(Value::as_u64).unwrap_or(5) as usize;
             let budget = args.get("budget").and_then(Value::as_u64).unwrap_or(2000) as usize;
-            // recall_decayed with half_life 0 keeps importance weighting (a memory marked
-            // important ranks higher) without time decay; Destination::Remote still drops
-            // Private memories at the egress wall.
-            let hits = store.recall_decayed(&query, Destination::Remote, k, budget, 0);
+            // half_life 0 keeps importance weighting (a memory marked important ranks higher)
+            // without time decay; a positive value also biases toward recent memories.
+            // Destination::Remote drops Private memories at the egress wall either way.
+            let half_life = args.get("half_life").and_then(Value::as_u64).unwrap_or(0);
+            let hits = store.recall_decayed(&query, Destination::Remote, k, budget, half_life);
             if hits.is_empty() {
                 "(no relevant memories)".to_string()
             } else {
-                hits.iter()
-                    .map(|b| format!("[{}] {}", b.id, b.text))
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                render_items(&hits)
+            }
+        }
+        "recent" => {
+            let k = args.get("k").and_then(Value::as_u64).unwrap_or(5) as usize;
+            let budget = args.get("budget").and_then(Value::as_u64).unwrap_or(2000) as usize;
+            // recall_recent is newest-first and egress-filtered (Private never leaves), so
+            // taking the first k yields the k most recent shareable memories within budget.
+            let mut items = store.recall_recent(Destination::Remote, budget);
+            items.truncate(k);
+            if items.is_empty() {
+                "(no memories yet)".to_string()
+            } else {
+                render_items(&items)
             }
         }
         "remember_fact" => {
