@@ -40,6 +40,11 @@ pub mod embed;
 #[cfg(feature = "local-embed")]
 pub mod model_embed;
 
+/// Per-store key resolution ($MNEMA_KEY or a sidecar `<store>.key`) shared by the CLI and MCP
+/// server. I/O glue below the behavioral waterline, behind `secure` (needs the encrypted store).
+#[cfg(feature = "secure")]
+pub mod keyfile;
+
 /// Hybrid retrieval (Phase 2b): reciprocal-rank fusion of vector + recency + keyword
 /// rankings into one `recall`, routed through the egress filter (proposal §3.3).
 pub mod retrieval;
