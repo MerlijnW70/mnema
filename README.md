@@ -108,9 +108,16 @@ irm https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.ps1 | iex
 cargo install --git https://github.com/MerlijnW70/mnema mnema --features mcp
 ```
 
-The store is created and encrypted on first use: set `MNEMA_KEY` to a passphrase, or omit it for
-an auto-generated per-store key file (`<store>.key`). Then [point your MCP client](#use-it-as-an-mcp-server)
-at `mnema-mcp`.
+The store is created and encrypted on first use. You don't need to manage a key: **omit
+`MNEMA_KEY`** and mnema generates a strong random per-store key file (`<store>.key`). Prefer a
+portable passphrase (shared store, CI, an env-only secret)? Set `MNEMA_KEY` to any string — or to a
+strong random one with `mnema keygen`:
+
+```bash
+export MNEMA_KEY="$(mnema keygen)"
+```
+
+Then [point your MCP client](#use-it-as-an-mcp-server) at `mnema-mcp`.
 
 ## Quickstart (from a checkout)
 
