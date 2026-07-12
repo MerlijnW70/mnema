@@ -150,6 +150,18 @@ fn tools_list() -> Value {
             }
         },
         {
+            "name": "prune",
+            "description": "Forget memories that have faded: those whose importance, decayed over 'half_life' ticks of age, has dropped below 'threshold'. Keeps a long-lived store bounded — reinforcement keeps what's used, this sheds what isn't. Destructive.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "half_life": { "type": "integer", "description": "ticks of age over which a memory's salience halves; 0 disables decay and prunes purely by importance" },
+                    "threshold": { "type": "number", "description": "salience cutoff; a memory below this is forgotten (a memory at or above it is kept)" }
+                },
+                "required": ["half_life", "threshold"]
+            }
+        },
+        {
             "name": "forget",
             "description": "Hard-delete every memory whose content contains the given substring.",
             "inputSchema": {
@@ -253,6 +265,17 @@ fn handle_tool_call(
             } else {
                 format!("no memory with id {id}")
             }
+        }
+        "prune" => {
+            let half_life = args.get("half_life").and_then(Value::as_u64).unwrap_or(0);
+            let threshold = args.get("threshold").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            let receipt = store.prune_faded(half_life, threshold);
+            persist(store, path, key);
+            format!(
+                "pruned {} faded memories; {} remain",
+                receipt.purged.len(),
+                receipt.remaining
+            )
         }
         "forget" => {
             let needle = arg_str("contains");
