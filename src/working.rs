@@ -5,7 +5,7 @@
 //! persisted — it is the model's short-term working set, not its long-term record.
 //!
 //! Pure safe Rust, zero dependencies (ADR-0007 holds). The two load-bearing,
-//! noha-pinned rules are: a note is live iff its age is within the horizon (the
+//! mutation-pinned rules are: a note is live iff its age is within the horizon (the
 //! `<=` boundary is inclusive), and the store never holds more than `capacity`
 //! notes (the oldest goes first).
 

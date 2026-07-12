@@ -4,7 +4,7 @@
 //! [`VectorIndex`].
 //!
 //! Exact, not approximate, on purpose. An HNSW / ANN index is *faster* but only
-//! *approximately* correct — its win is latency, which is invisible to noha's
+//! *approximately* correct — its win is latency, which is invisible to the mutation gate's
 //! behavioural ratchet (BND-performance-blindness) and belongs on a channel-B fitness
 //! benchmark, not here. Exact brute-force nearest-neighbour is the *correctness*
 //! baseline this slice pins: given a query, it returns the true top-k by cosine
