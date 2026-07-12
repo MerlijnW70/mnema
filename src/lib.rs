@@ -2,7 +2,7 @@
 
 //! `mnema` — Phase-1 seed of the local-first LLM memory layer
 //! (`docs/proposals/mnema-memory-layer.md`). The smallest slice that is both
-//! *real* and *internal-tool-provable*: the **egress filter** — the load-bearing privacy
+//! *real* and *mutation-provable*: the **egress filter** — the load-bearing privacy
 //! invariant of ADR-0021 — plus the minimal memory model it guards and
 //! the recency assembly it feeds.
 //!

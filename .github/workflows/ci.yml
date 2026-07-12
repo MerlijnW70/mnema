@@ -33,7 +33,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.96"
-      # Exactly what the internal-tool ratchet runs locally.
+      # Exactly what the local quality gate runs.
       - run: cargo test --features secure
 
   build:

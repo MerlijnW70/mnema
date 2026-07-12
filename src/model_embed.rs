@@ -2,7 +2,7 @@
 //! through [candle](https://github.com/huggingface/candle) (pure Rust: no Python, no ONNX C++
 //! runtime). Behind the opt-in `local-embed` feature so the zero-dependency core is untouched.
 //!
-//! This is I/O + model glue that sits **below internal-tool's behavioral waterline** (like the CLI): it
+//! This is I/O + model glue that sits **below the mutation gate's behavioral waterline** (like the CLI): it
 //! is not in the probed `sources`, because a transformer forward pass is not deterministic
 //! logic a mutation ratchet can pin. The *pooling math* it rests on — [`mean_pool`] and
 //! [`l2_normalize`] — lives in [`crate::embed`] and **is** probed, so the load-bearing

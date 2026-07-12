@@ -140,25 +140,22 @@ guarantee above still holds, and the memory logic stays mutation-pinned.
 - [`docs/NARRATIVE.md`](docs/NARRATIVE.md) — the story of building it under a mutation ratchet.
 - [`docs/README.md`](docs/README.md) — how to read the docs (and where cross-references point).
 
-## Provenance
+## Correctness
 
-`mnema` was extracted from the [**emerge**](https://github.com/MerlijnW70/private) research project,
-where it was built from commit one under **internal-tool** — a zero-dependency mutation-coverage gate whose
-rule is that *a green build proves the changed logic is tested*. Every invariant above is pinned by
-that ratchet: at extraction, **155/155 viable mutants killed, 0 survivors, 100%**. Cross-references in
-the ADRs to `ADR-0007`, `BND-*`, or `Part N` point back to the emerge repository (see
-[`docs/README.md`](docs/README.md)).
+Every invariant above is pinned by a **zero-dependency mutation-coverage gate**, whose rule is
+that *a green build proves the changed logic is tested* — a mutation to any pinned branch must
+turn a test red, or the build is not green. At last check: **192/192 viable mutants killed,
+0 survivors, 100%**.
 
 ## Validated in a live agentic loop
 
-Beyond its unit tests, `mnema` has been driven by a **real self-improving agent** (emerge's
-evolution loop, see [`docs/adr/0022`](docs/adr/0022-memory-augmented-self-evolution.md)): the loop
+Beyond its unit tests, `mnema` has been driven by a **real self-improving agent**: the loop
 stored each iteration's verdict as a memory and recalled the relevant lessons before the next
-proposal. In live runs the proposer **demonstrably used the recall** — it cited a recorded rejection
-by its detail code (`channelB-regress:scan`) and redesigned its change specifically so it would *not*
-repeat the remembered failure. Contradiction-resolving writes kept the belief base current across
-iterations; the egress filter and encrypted store held throughout. The memory layer works not just in
-a test harness, but as the actual memory of an agent doing real work.
+proposal. In live runs the proposer **demonstrably used the recall** — it cited a recorded
+rejection by its detail code and redesigned its change specifically so it would *not* repeat the
+remembered failure. Contradiction-resolving writes kept the belief base current across iterations;
+the egress filter and encrypted store held throughout. The memory layer works not just in a test
+harness, but as the actual memory of an agent doing real work.
 
 ## License
 

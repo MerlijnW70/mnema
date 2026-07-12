@@ -1,7 +1,7 @@
 //! A live, self-verifying tour of the Mnema memory layer (run with
 //! `cargo run --example memory_demo --features secure`).
 //!
-//! Every line marked ✓ is a guarantee the internal-tool mutation ratchet *proves* elsewhere in
+//! Every line marked ✓ is a guarantee the mutation gate *proves* elsewhere in
 //! the crate — here we exercise them end-to-end on one realistic assistant session.
 //! The demo `assert!`s each guarantee, so a broken one aborts the run rather than
 //! printing a comforting lie. That is the whole point: a green build means something.

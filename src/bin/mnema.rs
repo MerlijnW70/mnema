@@ -1,10 +1,10 @@
-//! `mnema` — a tiny CLI over the memory layer, so non-Rust callers (notably the
-//! evolution loop, `scripts/evolve.sh`) can remember and recall across runs.
+//! `mnema` — a tiny CLI over the memory layer, so non-Rust callers can remember and recall
+//! across runs.
 //!
-//! Deliberately thin: every real decision lives in the ratchet-pinned facade; this only
-//! parses args, loads/seals the on-disk store, and prints. It is I/O orchestration
-//! *below internal-tool's behavioral waterline* (Part 23) — like `evolve.sh` itself — so it is
-//! not part of the probed `sources`. The store is one sealed blob (ADR-0020 crypto).
+//! Deliberately thin: every real decision lives in the mutation-pinned facade; this only
+//! parses args, loads/seals the on-disk store, and prints. It is I/O orchestration below the
+//! mutation gate's behavioral waterline, so it is not part of the probed `sources`. The store
+//! is one sealed blob (ADR-0020 crypto).
 //!
 //! The key is per-store, resolved in this order (never on the command line):
 //!   1. `$MNEMA_KEY` if set — an explicit passphrase (shared stores, CI, env-only secrets);
