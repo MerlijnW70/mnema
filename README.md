@@ -115,6 +115,18 @@ Because `recall` is egress-filtered, a `Private` memory **never reaches the mode
 cargo build --release --features mcp --bin mnema-mcp
 ```
 
+By default recall rides the zero-dependency lexical embedder. For **semantic** recall — matching
+on meaning, not just shared words — build with the opt-in `local-embed` feature, which loads
+`all-MiniLM-L6-v2` in-process (pure Rust, via candle; the model is fetched once and cached):
+
+```bash
+cargo build --release --features mcp,local-embed --bin mnema-mcp
+```
+
+The embedder is fixed at build time and a store is embedder-specific (the vector widths differ),
+so keep one store per binary — a semantic binary opens the semantic store it wrote, and likewise
+for the lexical one.
+
 Point your MCP client at the binary, with the store path and passphrase in the environment:
 
 ```jsonc
