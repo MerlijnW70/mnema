@@ -15,8 +15,8 @@
 > - **Not built:** the entity/relation **graph** index, **bloom/vector write-time dedup**, and
 >   a write-time injection classifier. Retrieval delivers memories as *data*, never instructions.
 >
-> Codename **Mnema** (a stored memory trace) — a memory engine built next to `emerge` under
-> its correctness discipline (noha: a green build proves the changed logic is *tested*).
+> Codename **Mnema** (a stored memory trace) — a memory engine built under
+> its correctness discipline (a mutation-coverage gate: a green build proves the changed logic is *tested*).
 
 ---
 
@@ -30,7 +30,7 @@ goal as something we can actually defend:
 | --- | --- | --- |
 | Extremely fast | **Sub-millisecond recall on 100k+ memories, on-device, single-digit-ns hot ops** | Real, measurable, and our Rust substrate already lives here. |
 | 100% secure | **Encrypted at rest · injection-resistant retrieval · explicit egress control · auditable · true hard-delete** | "100% secure" is unfalsifiable marketing. A concrete threat model is defensible. |
-| World-class / unmatched | **Provably-tested memory logic (noha) + zero-`unsafe` Rust + local-first** | The moat is *correctness we can prove*, not feature count. No competitor has this. |
+| World-class / unmatched | **Provably-tested memory logic (mutation-covered) + zero-`unsafe` Rust + local-first** | The moat is *correctness we can prove*, not feature count. No competitor has this. |
 
 **The one differentiator that matters:** plenty of agent-memory tools already exist and all
 have "features." "Unmatched" cannot come from a longer feature list. It comes from the two
@@ -41,7 +41,7 @@ things those tools do *badly* and we can do *provably*:
 2. **Injection-resistant retrieval** — stored text is *data*, never *instructions*.
    Memory poisoning is the marquee AI-memory attack and the industry is weak on it.
 
-Both are decision-heavy code paths — exactly what noha's mutation ratchet pins. That
+Both are decision-heavy code paths — exactly what the mutation gate pins. That
 is the whole thesis: *our memory engine's judgment is tested, not just its plumbing.*
 
 ---
@@ -118,7 +118,7 @@ rebuildable projection. This gives us audit, time-travel, cheap schema evolution
 4. **Contradiction-resolve** — detect when a candidate conflicts with an existing
    memory (same subject, incompatible predicate). On conflict: write a new version,
    **tombstone the old with provenance**, keep confidence + timestamp. *Do not append
-   both.* This is the function that most determines quality and is the first noha
+   both.* This is the function that most determines quality and is the first mutation-coverage
    target.
 5. **Schedule decay** — assign an importance and a forgetting curve; low-value
    memories fade unless reinforced.
@@ -136,7 +136,7 @@ rebuildable projection. This gives us audit, time-travel, cheap schema evolution
 
 ---
 
-## 4. Speed plan (reuses what `emerge` already proved)
+## 4. Speed plan 
 
 | Technique | Source in this repo |
 | --- | --- |
@@ -162,7 +162,7 @@ mnema.audit(memory_id)                -> History          // provenance + versio
 ```
 
 Plus an **MCP server** (`mnema-mcp`) so any agent uses it tool-to-tool — the exact
-pattern this repo already ships for `noha-mcp`. That is how "any LLM" gets the memory,
+pattern this repo already ships for an MCP server. That is how "any LLM" gets the memory,
 without an SDK per language.
 
 ---
@@ -199,7 +199,7 @@ lot; it does not make the machine a vault.
 
 ---
 
-## 7. Honest tensions with `emerge`'s ethos (decide these first)
+## 7. Honest tensions to weigh first
 
 Two of this repo's rules are load-bearing and this proposal strains both. These are
 the real design decisions, and they should become ADRs before any code:
@@ -217,10 +217,10 @@ the real design decisions, and they should become ADRs before any code:
    acceptably; if we need more, use a safe SIMD abstraction, never raw intrinsics. The
    wall is the moat — do not trade it for a benchmark.
 
-3. **noha coverage of *probabilistic* judgment.** Just like `bloom.rs`'s false-positive
+3. **mutation coverage of *probabilistic* judgment.** Just like `bloom.rs`'s false-positive
    rate (Part 18–20), the *quality* of contradiction-resolution and ranking is
    statistical, not a deterministic contract a mutant can violate. So: pin the
-   deterministic invariants with noha (a resolved contradiction never leaves both
+   deterministic invariants with the mutation gate (a resolved contradiction never leaves both
    versions live; egress filter never emits a `private` memory to a remote bundle;
    `forget` leaves zero recoverable bytes) **and** guard the fuzzy quality with a
    channel-B fitness benchmark (recall@k, contradiction-accuracy on a labeled set).
@@ -229,7 +229,7 @@ the real design decisions, and they should become ADRs before any code:
 
 ## 8. Phased build plan
 
-| Phase | Deliverable | noha pins |
+| Phase | Deliverable | the gate pins |
 | --- | --- | --- |
 | **0** | This doc → 2–3 ADRs (dep policy, egress model, unsafe wall reaffirmed) | — |
 | **1** | Storage core: encrypted append-log + slab index + episodic store + recall-by-recency | log integrity, encryption round-trip, purge |

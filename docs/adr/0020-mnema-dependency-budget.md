@@ -47,9 +47,9 @@ self-contained integrity) is preserved. `unsafe` remains forbidden crate-wide �
 safety half is retained in full; only its zero-dependency half is narrowed to "zero by
 default, a named budget under `secure`."
 
-## Noha-Fitness-Result — what did the probe say?
+## Mutation-Coverage Result
 Verified on the first Mnema slice built under this budget (the encrypted episodic store,
-`src/mnema/store.rs`). The gate now runs `--all-features` (noha.yaml `test`/`build`/
+`src/mnema/store.rs`). The gate now runs `--all-features` (the gate config's `test`/`build`/
 `guard`, and `check.sh`) so the gated crypto codec is actually probed. The teeth-gap loop
 ran as designed: the first full prober reported **8 new survivors** in the manual codec —
 of which **2 were genuine equivalent mutants** (`RECORD_HEAD = 8+1+1+8+4` mutated to `20`,
@@ -74,6 +74,6 @@ uncompilable everywhere.
 - Narrative: `docs/SELF-EVOLUTION.md` Part 25 (the Mnema subsystem)
 - ADR-0007 — the zero-dependency + forbid-unsafe wall this *partially* reverses (deps
   only; the `unsafe` ban is retained in full).
-- BND-tested-not-correct — noha proves the codec is *pinned*; a human ratified the trade.
+- BND-tested-not-correct — the mutation gate proves the codec is *pinned*; a human ratified the trade.
 - `docs/proposals/mnema-memory-layer.md` §7.1 — the tension this resolves.
 - ADR-0021 — the companion egress decision; the egress filter code ships in `src/mnema.rs`.

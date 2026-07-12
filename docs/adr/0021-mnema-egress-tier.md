@@ -41,19 +41,19 @@ accept this — the whole point of the tier is that the user has decided this co
 worth that cost. The trade is **"provable non-egress" over "maximal recall for every
 query"**, chosen per-memory by the user, not globally by us.
 
-## Noha-Fitness-Result — what did the probe say?
+## Mutation-Coverage Result
 **Shipped and pinned** (`src/mnema.rs`). The deterministic invariant —
 > *the egress filter never emits a `Private`-tier memory into a bundle whose destination
 > is `Remote`* — for all inputs, no exceptions
 is enforced in `assemble_bundle` and pinned by `private_content_never_reaches_a_remote_bundle`
 (plus the redaction/local-availability tests). This is a hard behavioural contract, unlike
 the *quality* of retrieval, which is statistical and belongs on channel B (cf.
-BND-statistical-quality). It is exactly the shape noha's ratchet pins well: a mutant that
+BND-statistical-quality). It is exactly the shape the mutation gate pins well: a mutant that
 lets a private memory through must be killed by a test — and is, inside the current
 **0-survivor** ratchet (90/90 viable killed at time of ratification).
 
 ## Consequences — how does this affect future evolution?
-The egress filter is a **load-bearing, noha-pinned invariant** of the read path — on the
+The egress filter is a **load-bearing, mutation-pinned invariant** of the read path — on the
 same footing as "a resolved contradiction never leaves both versions live" (ADR — the
 semantic store). Any future feature that assembles context (summarisation, tool-call
 arguments, cross-memory synthesis, the retrieval bundle) MUST route through the egress
@@ -63,7 +63,7 @@ enforcement is not negotiable at runtime.
 ## Related
 - Narrative: `docs/SELF-EVOLUTION.md` Part 25 (the Mnema subsystem)
 - ADR-0020 — the dependency budget of the layer this ships in.
-- BND-tested-not-correct — noha proves the filter is *pinned*; a human owns whether the
+- BND-tested-not-correct — the mutation gate proves the filter is *pinned*; a human owns whether the
   tier *policy* is right.
 - BND-statistical-quality — why retrieval *quality* is channel-B, but this *contract* is
   ratchet-pinned.

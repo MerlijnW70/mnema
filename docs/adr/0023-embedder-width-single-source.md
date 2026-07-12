@@ -19,7 +19,7 @@ summary: The built-in embedder's dimensionality was a private `const DIMS` dupli
 ## Context — what problem did we solve?
 The built-in `HashEmbedder` (ADR-0012 "own your hasher") takes its width as a runtime
 argument, and each binary that constructs one carried its own `const DIMS`. Two binaries
-operate the **same store family** — the `mnema` CLI (I/O glue below noha's waterline, ADR-0022)
+operate the **same store family** — the `mnema` CLI (I/O glue below the mutation gate's waterline)
 and the `mnema-mcp` server — and they had drifted apart: the CLI embedded at **64**, the
 server at **128**. Sealing/opening a store is dimension-agnostic (it is just crypto over a
 blob, ADR-0020), so nothing *fails loudly*. But a query embedded at one width against vectors
@@ -52,12 +52,12 @@ that this pins the *default* width, not a *per-store* width; a caller that delib
 constructs `HashEmbedder::new(n)` for some other `n` and points it at a `DEFAULT_DIMS` store
 still gets silent mismatch (see Consequences).
 
-## Noha-Fitness-Result — what did the probe say?
+## Mutation-Coverage Result
 **Not ratchet-pinnable — and this ADR says so plainly.** This is a textbook
 `BND-performance-blindness` case: a behavioral mutation gate cannot see a defect that changes
 only *recall quality*, and cross-binary width agreement is exactly that (cf. `BND-statistical-quality`).
 The mismatch also lived in the CLI/server glue, which is **below the behavioral waterline**
-(ADR-0022) and so is not part of the probed `sources` at all. The `golden_witness_pins_the_exact_mixing`
+() and so is not part of the probed `sources` at all. The `golden_witness_pins_the_exact_mixing`
 test pins the FNV mixing at a *fixed* width (`new(8)`); it cannot pin what width two independent
 binaries happen to choose. The full suite is green (**83/83** with `--features secure`), but green
 here means "the pinned logic still holds," not "the two binaries agree" — the ratchet was never
@@ -78,6 +78,6 @@ plus review, honestly outside the proof.
 ## Related
 - ADR-0020 — the `secure` feature the CLI and server both build on; the store blob they share.
 - ADR-0022 — the CLI as below-waterline glue; why this class of bug is not ratchet-probed.
-- ADR-0012 (emerge) — "own your hasher": the witness-pinned `HashEmbedder` this widens.
-- BND-performance-blindness / BND-statistical-quality (emerge) — why a behavioral gate is blind
+- ADR-0012 — "own your hasher": the witness-pinned `HashEmbedder` this widens.
+- BND-performance-blindness / BND-statistical-quality — why a behavioral gate is blind
   to a recall-only regression, and why retrieval quality lives on channel B.
