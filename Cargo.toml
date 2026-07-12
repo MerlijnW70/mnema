@@ -6,6 +6,9 @@ description = "A fast, secure, local-first memory layer for LLMs — four memory
 license = "MIT OR Apache-2.0"
 keywords = ["memory", "llm", "ai", "vector", "local-first"]
 categories = ["data-structures", "database-implementations"]
+# Development-only files that must never ship in the published crate (quality-gate config
+# and its baseline, the scan output). The library and its tests are all that publishes.
+exclude = [".internal-tool", "internal-tool.yaml", ".sota"]
 
 [dependencies]
 # The `secure` feature (encryption at rest for the episodic store + the Mnema facade):
