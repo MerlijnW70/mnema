@@ -99,8 +99,12 @@ fn load(store: &str) -> Mnema<HashEmbedder> {
     let path = Path::new(store);
     if path.exists() {
         let bytes = std::fs::read(store).unwrap_or_else(|e| die(&format!("read {store}: {e}")));
-        Mnema::open(&bytes, &resolve_key(path), embedder)
-            .unwrap_or_else(|_| die("cannot open store (wrong key or corrupt)"))
+        Mnema::open(&bytes, &resolve_key(path), embedder).unwrap_or_else(|_| {
+            die(
+                "cannot open store (wrong key or corrupt). If a `rekey` was interrupted, set \
+                 $MNEMA_KEY to the OLD passphrase and re-run `mnema rekey <store>` to finish it.",
+            )
+        })
     } else {
         Mnema::new(embedder)
     }
@@ -117,6 +121,27 @@ fn save(store: &str, mem: &mut Mnema<HashEmbedder>) {
 /// over `path`. The rename is atomic within the directory, so a crash or full disk mid-write
 /// can never leave `path` a torn blob — it stays either the whole old store or the whole new
 /// one, and the original is untouched on any failure.
+/// Take an exclusive advisory lock for the store via a sibling `<store>.lock`, returning the held
+/// `File` (drop to release; the OS releases on exit). A write command holds this across its
+/// load→mutate→save so it can't clobber, or be clobbered by, a concurrent writer (another `mnema`
+/// or a running `mnema-mcp`). Read-only commands don't lock — writes are atomic, so a reader sees
+/// the whole old or whole new store, never a torn one.
+fn lock_store(store: &str) -> std::fs::File {
+    let lockpath = format!("{store}.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lockpath)
+        .unwrap_or_else(|e| die(&format!("cannot open lock file {lockpath}: {e}")));
+    if file.try_lock().is_err() {
+        die(&format!(
+            "{store} is in use by another mnema process; retry once it exits"
+        ));
+    }
+    file
+}
+
 fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = format!("{path}.tmp");
     {
@@ -127,29 +152,42 @@ fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Migrate a store to a per-store keyfile: open it with the current `$MNEMA_KEY`, then
-/// re-seal it under a freshly generated `<store>.key`. Refuses to clobber an existing
-/// keyfile, so it is safe to run at most once per store.
+/// Migrate a store to a per-store keyfile: open it with the current `$MNEMA_KEY`, then re-seal it
+/// under a `<store>.key`.
+///
+/// **Crash-safe by ordering + resume.** The keyfile is written *before* the store is sealed under
+/// it, so the new key is always durable before any blob depends on it (sealing store-first could
+/// commit a store under a random key that is then lost if the keyfile write fails — an
+/// unrecoverable store). A crash in the window leaves keyfile=new, store=still-under-old — the
+/// store is intact and openable with the old passphrase. Re-running `rekey` (with `$MNEMA_KEY` =
+/// the old passphrase) then **resumes**: it reuses the existing keyfile and finishes the re-seal,
+/// rather than refusing. A store already fully migrated will not open under the old passphrase, so
+/// it cannot be clobbered.
 fn rekey(store: &str) {
     let path = Path::new(store);
     if !path.exists() {
         die(&format!("rekey: store {store} does not exist"));
     }
+    let _lock = lock_store(store);
     let old = match std::env::var("MNEMA_KEY") {
         Ok(k) if !k.is_empty() => k.into_bytes(),
         _ => die("rekey: set $MNEMA_KEY to the store's CURRENT passphrase"),
     };
-    let keyfile = keyfile_path(path);
-    if keyfile.exists() {
-        die(&format!(
-            "rekey: {} already exists; refusing to overwrite",
-            keyfile.display()
-        ));
-    }
     let bytes = std::fs::read(store).unwrap_or_else(|e| die(&format!("read {store}: {e}")));
     let mut mem = Mnema::open(&bytes, &old, HashEmbedder::new(DIMS))
         .unwrap_or_else(|_| die("rekey: cannot open store with $MNEMA_KEY (wrong passphrase?)"));
-    let new_key = generate_keyfile(&keyfile);
+
+    // Reuse an existing keyfile to resume an interrupted rekey; otherwise generate + persist one.
+    // Either way the key is on disk before we seal the store under it.
+    let keyfile = keyfile_path(path);
+    let new_key = match std::fs::read(&keyfile) {
+        Ok(k) if k.len() == 32 => k,
+        Ok(_) => die(&format!(
+            "rekey: {} is malformed (expected 32 bytes); remove it and retry",
+            keyfile.display()
+        )),
+        Err(_) => generate_keyfile(&keyfile),
+    };
     let blob = mem
         .seal(&new_key)
         .unwrap_or_else(|_| die("rekey: seal failed"));
@@ -172,6 +210,7 @@ fn main() {
     match (cmd, args.len()) {
         ("remember", 4) => {
             let store = &args[1];
+            let _lock = lock_store(store);
             let mut mem = load(store);
             let id = mem.remember(tier(&args[2]), &args[3]);
             save(store, &mut mem);
@@ -179,6 +218,7 @@ fn main() {
         }
         ("fact", 5) => {
             let store = &args[1];
+            let _lock = lock_store(store);
             let mut mem = load(store);
             let res = mem.remember_fact(&args[2], &args[3], &args[4]);
             save(store, &mut mem);
@@ -208,6 +248,7 @@ fn main() {
         }
         ("prune", 4) => {
             let store = &args[1];
+            let _lock = lock_store(store);
             let half_life: u64 = args[2]
                 .parse()
                 .unwrap_or_else(|_| die("half_life must be a number"));
