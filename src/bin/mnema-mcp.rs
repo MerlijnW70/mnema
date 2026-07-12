@@ -35,32 +35,36 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     let path = std::env::var("MNEMA_PATH").unwrap_or_else(|_| "mnema.store".to_string());
-    let key = std::env::var("MNEMA_KEY").unwrap_or_default();
-    if key.is_empty() {
-        eprintln!("mnema-mcp: MNEMA_KEY is empty — set a passphrase to encrypt the store at rest");
-    }
-
     // Hold an exclusive advisory lock on the store for the whole session. A resident server keeps
     // the store in RAM and re-seals it on every write, so a second concurrent writer's records
     // would be silently clobbered by the next re-seal. `_lock` lives to the end of main; the OS
-    // releases it when the process exits (even on crash).
+    // releases it when the process exits (even on crash). Taken first, so a keyfile generated below
+    // (for a fresh store) is written under the lock.
     let _lock = lock_store(&path);
+
+    // Resolve the per-store key the same way the CLI does: $MNEMA_KEY, else a random sidecar
+    // <store>.key (generated for a fresh store). This shares a store family with the CLI and never
+    // seals under an empty passphrase — an unset key no longer means weak, silent encryption.
+    let key = mnema::keyfile::resolve_key(std::path::Path::new(&path)).unwrap_or_else(|e| {
+        eprintln!("mnema-mcp: {e}");
+        std::process::exit(1);
+    });
 
     // The embedder is chosen at compile time. `serve` is generic over it, so the whole server
     // is identical either way — only the vector arm of recall differs (lexical vs semantic).
     #[cfg(feature = "local-embed")]
-    let store = open_store(&path, key.as_bytes(), || {
+    let store = open_store(&path, &key, || {
         mnema::model_embed::MiniLmEmbedder::load().unwrap_or_else(|e| {
             eprintln!("mnema-mcp: could not load the semantic model ({e})");
             std::process::exit(1);
         })
     });
     #[cfg(not(feature = "local-embed"))]
-    let store = open_store(&path, key.as_bytes(), || {
+    let store = open_store(&path, &key, || {
         HashEmbedder::new(HashEmbedder::DEFAULT_DIMS)
     });
 
-    serve(store, &path, key.as_bytes());
+    serve(store, &path, &key);
 }
 
 /// The JSON-RPC read/dispatch/persist loop, generic over the embedder in play.
