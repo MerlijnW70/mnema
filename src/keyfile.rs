@@ -69,6 +69,15 @@ fn restrict_perms(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_perms(_path: &Path) {}
 
+/// A fresh, strong random passphrase — hex of 32 random bytes (256 bits) — suitable for use as
+/// `$MNEMA_KEY`. For callers who want a portable, human-copyable secret (a shared store, CI, an MCP
+/// client config) rather than the on-disk sidecar keyfile.
+pub fn generate_passphrase() -> Result<String, KeyError> {
+    let mut k = [0u8; 32];
+    getrandom::getrandom(&mut k).map_err(|_| KeyError::Entropy)?;
+    Ok(k.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// Generate a fresh random 32-byte key, persist it to `path` (owner-only where modelled), return it.
 pub fn generate_keyfile(path: &Path) -> Result<Vec<u8>, KeyError> {
     let mut k = [0u8; 32];

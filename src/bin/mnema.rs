@@ -21,6 +21,7 @@
 //!   mnema stats    <store>
 //!   mnema prune    <store> <half_life> <threshold>             # forget faded memories
 //!   mnema rekey    <store>   # $MNEMA_KEY = old passphrase; re-seals under a new keyfile
+//!   mnema keygen              # print a strong random passphrase to use as $MNEMA_KEY
 
 use std::io::Write;
 use std::path::Path;
@@ -218,8 +219,17 @@ fn main() {
             );
         }
         ("rekey", 2) => rekey(&args[1]),
+        ("keygen", 1) => {
+            // A strong random passphrase to set as $MNEMA_KEY (e.g. `export MNEMA_KEY=$(mnema keygen)`).
+            // For a portable secret; if you don't need one, just omit $MNEMA_KEY and a per-store
+            // keyfile is generated for you.
+            println!(
+                "{}",
+                keyfile::generate_passphrase().unwrap_or_else(|e| die(&e.to_string()))
+            );
+        }
         _ => die(
-            "usage: mnema remember|recall|fact|stats|prune|rekey <store> ...  (see the source header)",
+            "usage: mnema remember|recall|fact|stats|prune|rekey <store> ... | keygen  (see the source header)",
         ),
     }
 }
