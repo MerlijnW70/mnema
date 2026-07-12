@@ -52,6 +52,28 @@ pub struct Mnema<E: Embedder> {
     seal_key: Option<SealingKey>,
 }
 
+/// A privacy-oriented census of the store — counts only, never content. Answers the question
+/// a user of a local memory actually asks: *"how much Private data am I holding?"* The three
+/// episodic tiers partition `total` (`open + redacted + private == total`); `beliefs` and
+/// `private_beliefs` count **live** semantic beliefs (superseded history is not counted).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemoryStats {
+    /// Total episodic memories stored.
+    pub total: usize,
+    /// Episodic memories at the `Open` tier (shareable content).
+    pub open: usize,
+    /// Episodic memories at the `Redacted` tier (a sanitized surface may go remote).
+    pub redacted: usize,
+    /// Episodic memories at the `Private` tier (content never leaves the device).
+    pub private: usize,
+    /// Live semantic beliefs (contradiction-resolved; superseded history excluded).
+    pub beliefs: usize,
+    /// Live semantic beliefs held at the `Private` tier.
+    pub private_beliefs: usize,
+    /// Vectors currently in the exact index (tracks `total` for a well-behaved embedder).
+    pub indexed: usize,
+}
+
 impl<E: Embedder> Mnema<E> {
     /// A new, empty memory over `embedder` (whose `dims()` fixes the index width).
     pub fn new(embedder: E) -> Self {
@@ -387,6 +409,33 @@ impl<E: Embedder> Mnema<E> {
         self.index.len()
     }
 
+    /// A privacy census of the store — a per-tier count of episodic memories and live beliefs,
+    /// exposing *no content*. Lets a user audit how much `Private` data they hold. See
+    /// [`MemoryStats`].
+    pub fn stats(&self) -> MemoryStats {
+        let mut s = MemoryStats {
+            total: self.episodic.len(),
+            indexed: self.index.len(),
+            ..MemoryStats::default()
+        };
+        for m in self.episodic.events() {
+            match m.tier {
+                EgressTier::Open => s.open += 1,
+                EgressTier::Redacted => s.redacted += 1,
+                EgressTier::Private => s.private += 1,
+            }
+        }
+        for f in self.semantic.facts() {
+            if f.status == FactStatus::Live {
+                s.beliefs += 1;
+                if f.tier == EgressTier::Private {
+                    s.private_beliefs += 1;
+                }
+            }
+        }
+        s
+    }
+
     /// Encrypt the whole memory at rest — the episodic log, the semantic beliefs, and
     /// the logical clock — as one blob (`salt || nonce || AEAD(...)`). The vector index
     /// is *derived* (rebuildable by re-embedding), so it is not stored; [`open`]
@@ -628,6 +677,36 @@ mod tests {
         // Local sees the real content.
         let local = e.recall("secret note", Destination::Local, 10, 1_000);
         assert!(local.iter().any(|b| b.text == "full secret dossier"));
+    }
+
+    #[test]
+    fn stats_is_a_per_tier_census_of_memories_and_live_beliefs() {
+        let mut e = Mnema::new(VowelEmbedder);
+        // Distinct per-tier counts (3 / 2 / 1) so no counter can be mistaken for another.
+        e.remember(EgressTier::Open, "aaa");
+        e.remember(EgressTier::Open, "bbb");
+        e.remember(EgressTier::Open, "ccc");
+        e.remember_with(EgressTier::Redacted, 1.0, "ddd", "d-surface");
+        e.remember_with(EgressTier::Redacted, 1.0, "eee", "e-surface");
+        e.remember(EgressTier::Private, "fff");
+        // Beliefs: 2 open + 1 private live, so private (1) != non-private (2) — pins the tier test.
+        e.remember_fact_tiered("user", "city", "utrecht", EgressTier::Open);
+        e.remember_fact_tiered("user", "role", "admin", EgressTier::Open);
+        e.remember_fact_tiered("user", "ssn", "sekret", EgressTier::Private);
+        // Supersede the city belief: the old fact stays as history but must NOT be counted live.
+        e.remember_fact_tiered("user", "city", "amsterdam", EgressTier::Open);
+
+        let s = e.stats();
+        assert_eq!(s.total, 6);
+        assert_eq!(s.open, 3);
+        assert_eq!(s.redacted, 2);
+        assert_eq!(s.private, 1);
+        // The three episodic tiers partition the total.
+        assert_eq!(s.open + s.redacted + s.private, s.total);
+        // 3 live beliefs (amsterdam + role + ssn); the superseded utrecht is excluded — pins Live.
+        assert_eq!(s.beliefs, 3);
+        assert_eq!(s.private_beliefs, 1);
+        assert_eq!(s.indexed, 6);
     }
 
     #[test]
