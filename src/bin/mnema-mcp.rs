@@ -141,6 +141,15 @@ fn tools_list() -> Value {
             }
         },
         {
+            "name": "reinforce",
+            "description": "Strengthen a memory you found useful (by the id shown in a recall result) so it ranks higher next time and resists forgetting.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "integer", "description": "the memory id from a recall result" } },
+                "required": ["id"]
+            }
+        },
+        {
             "name": "forget",
             "description": "Hard-delete every memory whose content contains the given substring.",
             "inputSchema": {
@@ -234,6 +243,15 @@ fn handle_tool_call(
                     .map(|f| format!("{}.{} = {}", f.subject, f.attribute, f.value))
                     .collect::<Vec<_>>()
                     .join("\n")
+            }
+        }
+        "reinforce" => {
+            let id = args.get("id").and_then(Value::as_u64).unwrap_or(u64::MAX);
+            if store.reinforce(id) {
+                persist(store, path, key);
+                format!("reinforced memory {id}")
+            } else {
+                format!("no memory with id {id}")
             }
         }
         "forget" => {
