@@ -213,7 +213,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "stats",
-            "description": "Report how many memories are stored and indexed.",
+            "description": "A privacy census of the store: memory and belief counts broken down by egress tier (how much is open vs. private) — counts only, no content.",
             "inputSchema": { "type": "object", "properties": {} }
         }
     ]})
@@ -350,7 +350,13 @@ fn handle_tool_call<E: Embedder>(
                 receipt.remaining
             )
         }
-        "stats" => format!("{} memories, {} indexed", store.len(), store.indexed()),
+        "stats" => {
+            let s = store.stats();
+            format!(
+                "{} memories ({} open, {} redacted, {} private); {} live beliefs ({} private); {} indexed",
+                s.total, s.open, s.redacted, s.private, s.beliefs, s.private_beliefs, s.indexed
+            )
+        }
         other => {
             return json!({
                 "content": [{ "type": "text", "text": format!("unknown tool: {other}") }],
