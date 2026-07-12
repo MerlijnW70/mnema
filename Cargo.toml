@@ -1,7 +1,8 @@
 [package]
 name = "mnema"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
+repository = "https://github.com/MerlijnW70/mnema"
 description = "A fast, secure, local-first memory layer for LLMs — four memory types, contradiction-resolving writes, injection-resistant retrieval, encrypted at rest."
 license = "MIT OR Apache-2.0"
 keywords = ["memory", "llm", "ai", "vector", "local-first"]
@@ -47,7 +48,7 @@ local-embed = [
     "dep:serde_json",
 ]
 
-# `mcp` = the mnema-mcp server: a stdio JSON-RPC MCP server exposing remember / recall /
+# `mcp` = the mnema-server binary: a stdio JSON-RPC MCP server exposing remember / recall /
 # remember_fact / forget / stats as tools over an encrypted local store, so any MCP client
 # (Claude Code, Cursor, Claude Desktop) gets private local memory. Below-waterline glue over
 # the pinned facade; needs `secure` (encrypted store) + serde_json (already in-tree, ADR-0025)
@@ -63,8 +64,8 @@ required-features = ["secure"]
 
 # The MCP server — stdio JSON-RPC over an encrypted local store (needs the `mcp` feature).
 [[bin]]
-name = "mnema-mcp"
-path = "src/bin/mnema-mcp.rs"
+name = "mnema-server"
+path = "src/bin/mnema-server.rs"
 required-features = ["mcp"]
 
 # A live, self-verifying tour of the memory layer.

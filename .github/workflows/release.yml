@@ -1,6 +1,6 @@
 name: release
 
-# Build prebuilt `mnema` + `mnema-mcp` binaries for every major platform when a version tag is
+# Build prebuilt `mnema` + `mnema-server` binaries for every major platform when a version tag is
 # pushed, and attach them to a GitHub Release. The install scripts (install.sh / install.ps1) then
 # download these — so users get mnema with one command and no Rust toolchain.
 #
@@ -55,7 +55,7 @@ jobs:
         run: cargo install cross --locked
 
       # `--features mcp` pulls in `secure`, so both bins' required-features are satisfied and
-      # `--bins` builds `mnema` and `mnema-mcp` in one shot.
+      # `--bins` builds `mnema` and `mnema-server` in one shot.
       - name: Build
         shell: bash
         run: |
@@ -75,11 +75,11 @@ jobs:
           cp README.md "$stage/" 2>/dev/null || true
           cp LICENSE-MIT LICENSE-APACHE "$stage/" 2>/dev/null || true
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "$bindir/mnema.exe" "$bindir/mnema-mcp.exe" "$stage/"
+            cp "$bindir/mnema.exe" "$bindir/mnema-server.exe" "$stage/"
             7z a "$stage.zip" "$stage" >/dev/null
             echo "ASSET=$stage.zip" >> "$GITHUB_ENV"
           else
-            cp "$bindir/mnema" "$bindir/mnema-mcp" "$stage/"
+            cp "$bindir/mnema" "$bindir/mnema-server" "$stage/"
             tar czf "$stage.tar.gz" "$stage"
             echo "ASSET=$stage.tar.gz" >> "$GITHUB_ENV"
           fi

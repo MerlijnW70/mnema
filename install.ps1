@@ -1,4 +1,4 @@
-# mnema installer for Windows — downloads prebuilt mnema.exe (CLI) + mnema-mcp.exe (MCP server).
+# mnema installer for Windows — downloads prebuilt mnema.exe (CLI) + mnema-server.exe (MCP server).
 # No Rust toolchain required.
 #
 #   irm https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.ps1 | iex
@@ -40,11 +40,11 @@ try {
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     $src = Join-Path $tmp "mnema-$tag-$target"
     Copy-Item (Join-Path $src 'mnema.exe') $binDir -Force
-    Copy-Item (Join-Path $src 'mnema-mcp.exe') $binDir -Force
+    Copy-Item (Join-Path $src 'mnema-server.exe') $binDir -Force
 
     Write-Host "Installed mnema $tag to $binDir:"
     Write-Host "  $binDir\mnema.exe        (CLI)"
-    Write-Host "  $binDir\mnema-mcp.exe    (MCP server)"
+    Write-Host "  $binDir\mnema-server.exe    (MCP server)"
 
     # Add to the user PATH if it isn't already there.
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -59,8 +59,8 @@ Point your MCP client at the server (it creates + encrypts the store on first us
   {
     "mcpServers": {
       "mnema": {
-        "command": "$binDir\mnema-mcp.exe",
-        "env": { "MNEMA_PATH": "$env:USERPROFILE\mnema.store" }
+        "command": "$binDir\mnema-server.exe",
+        "args": ["--path", "$env:USERPROFILE\mnema.store"]
       }
     }
   }
