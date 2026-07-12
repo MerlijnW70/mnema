@@ -128,9 +128,10 @@ Point your MCP client at the binary, with the store path and passphrase in the e
 }
 ```
 
-Tools: **remember** (with an `open` / `redacted` / `private` tier), **recall**,
-**remember_fact**, **forget**, **stats**. The server is thin glue over the library — every
-guarantee above still holds, and the memory logic stays mutation-pinned.
+Tools: **remember** (with an `open` / `redacted` / `private` tier and an `importance`),
+**recall**, **reinforce** (strengthen a memory the agent actually used), **remember_fact**,
+**beliefs**, **forget**, **stats**. The server is thin glue over the library — every guarantee
+above still holds, and the memory logic stays mutation-pinned.
 
 ## Correctness
 

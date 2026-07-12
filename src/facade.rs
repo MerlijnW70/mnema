@@ -338,6 +338,14 @@ impl<E: Embedder> Mnema<E> {
         receipt
     }
 
+    /// Strengthen a recalled memory against the forgetting curve by raising its `importance`,
+    /// so a memory the agent actually used ranks higher next time and fades slower. Returns
+    /// whether a memory with `id` was found. Composes with [`recall_decayed`](Mnema::recall_decayed),
+    /// which weights hits by `importance`.
+    pub fn reinforce(&mut self, id: MemoryId) -> bool {
+        self.episodic.reinforce(id)
+    }
+
     /// Number of stored episodic memories.
     pub fn len(&self) -> usize {
         self.episodic.len()
