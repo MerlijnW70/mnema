@@ -1,12 +1,15 @@
-//! `mnema-mcp` — a Model Context Protocol server exposing mnema's memory as tools over stdio.
+//! `mnema-server` — a Model Context Protocol server exposing mnema's memory as tools over stdio.
 //!
 //! Any MCP client (Claude Code, Cursor, Claude Desktop) can give an agent **private, local,
-//! encrypted** memory by pointing it at this binary. Configure the store with two env vars:
+//! encrypted** memory by pointing it at this binary:
 //!
 //! ```jsonc
 //! // e.g. in an MCP client config
-//! { "command": "mnema-mcp", "env": { "MNEMA_PATH": "~/mnema.store", "MNEMA_KEY": "your-passphrase" } }
+//! { "command": "mnema-server", "args": ["--path", "~/mnema.store"] }
 //! ```
+//!
+//! The store path is `--path`, else `$MNEMA_PATH`, else `./mnema.store`. Set `$MNEMA_KEY` to a
+//! passphrase, or omit it for an auto-generated per-store key file.
 //!
 //! This is **below-waterline glue**: it speaks line-delimited JSON-RPC and persists the store,
 //! but every real decision — the egress wall, contradiction resolution, packing — lives in the
@@ -33,8 +36,43 @@ use serde_json::{Value, json};
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The store path: `--path <file>` if given, else `$MNEMA_PATH`, else `mnema.store`. Also handles
+/// `--help`. An MCP client can pass `args: ["--path", "…"]` or set the env var — either works.
+fn resolve_path() -> String {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut path = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--path" => {
+                i += 1;
+                path = Some(args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("mnema-server: --path needs a file argument");
+                    std::process::exit(2);
+                }));
+            }
+            "-h" | "--help" => {
+                println!(
+                    "mnema-server — MCP memory server (stdio JSON-RPC)\n\n\
+                     USAGE: mnema-server [--path <store>]\n\n\
+                     Store path: --path, else $MNEMA_PATH, else ./mnema.store.\n\
+                     $MNEMA_KEY sets a passphrase; omit it for an auto-generated <store>.key."
+                );
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("mnema-server: unknown argument '{other}' (try --help)");
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+    path.or_else(|| std::env::var("MNEMA_PATH").ok())
+        .unwrap_or_else(|| "mnema.store".to_string())
+}
+
 fn main() {
-    let path = std::env::var("MNEMA_PATH").unwrap_or_else(|_| "mnema.store".to_string());
+    let path = resolve_path();
     // Hold an exclusive advisory lock on the store for the whole session. A resident server keeps
     // the store in RAM and re-seals it on every write, so a second concurrent writer's records
     // would be silently clobbered by the next re-seal. `_lock` lives to the end of main; the OS
@@ -46,7 +84,7 @@ fn main() {
     // <store>.key (generated for a fresh store). This shares a store family with the CLI and never
     // seals under an empty passphrase — an unset key no longer means weak, silent encryption.
     let key = mnema::keyfile::resolve_key(std::path::Path::new(&path)).unwrap_or_else(|e| {
-        eprintln!("mnema-mcp: {e}");
+        eprintln!("mnema-server: {e}");
         std::process::exit(1);
     });
 
@@ -55,7 +93,7 @@ fn main() {
     #[cfg(feature = "local-embed")]
     let store = open_store(&path, &key, || {
         mnema::model_embed::MiniLmEmbedder::load().unwrap_or_else(|e| {
-            eprintln!("mnema-mcp: could not load the semantic model ({e})");
+            eprintln!("mnema-server: could not load the semantic model ({e})");
             std::process::exit(1);
         })
     });
@@ -461,12 +499,12 @@ fn lock_store(path: &str) -> std::fs::File {
         .truncate(false)
         .open(&lockpath)
         .unwrap_or_else(|e| {
-            eprintln!("mnema-mcp: cannot open lock file {lockpath} ({e})");
+            eprintln!("mnema-server: cannot open lock file {lockpath} ({e})");
             std::process::exit(1);
         });
     if file.try_lock().is_err() {
         eprintln!(
-            "mnema-mcp: {path} is already in use by another mnema process — refusing to start so a \
+            "mnema-server: {path} is already in use by another mnema process — refusing to start so a \
              concurrent writer's memories are not overwritten. Stop the other process and retry."
         );
         std::process::exit(1);
@@ -488,7 +526,7 @@ fn open_store<E: Embedder>(path: &str, key: &[u8], make: impl Fn() -> E) -> Mnem
             Ok(m) => m,
             Err(e) => {
                 eprintln!(
-                    "mnema-mcp: {path} exists but could not be opened ({e:?}) — wrong MNEMA_KEY \
+                    "mnema-server: {path} exists but could not be opened ({e:?}) — wrong MNEMA_KEY \
                      or a corrupt/newer store. Refusing to start so your memory is not \
                      overwritten. Fix the key, or move the file aside to begin fresh."
                 );
@@ -502,7 +540,7 @@ fn open_store<E: Embedder>(path: &str, key: &[u8], make: impl Fn() -> E) -> Mnem
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Mnema::new(make()),
         Err(e) => {
             eprintln!(
-                "mnema-mcp: could not read {path} ({e}) — refusing to start so an existing store \
+                "mnema-server: could not read {path} ({e}) — refusing to start so an existing store \
                  is not overwritten by an empty one. Resolve the I/O error (or move the file) and retry."
             );
             std::process::exit(1);
