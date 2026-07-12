@@ -22,6 +22,7 @@
 //!   mnema prune    <store> <half_life> <threshold>             # forget faded memories
 //!   mnema rekey    <store>   # $MNEMA_KEY = old passphrase; re-seals under a new keyfile
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -109,7 +110,21 @@ fn save(store: &str, mem: &mut Mnema<HashEmbedder>) {
     let blob = mem
         .seal(&resolve_key(Path::new(store)))
         .unwrap_or_else(|_| die("seal failed"));
-    std::fs::write(store, blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
+    write_atomic(store, &blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
+}
+
+/// Write `bytes` to `path` durably: write a sibling `.tmp`, flush it to disk, then rename it
+/// over `path`. The rename is atomic within the directory, so a crash or full disk mid-write
+/// can never leave `path` a torn blob — it stays either the whole old store or the whole new
+/// one, and the original is untouched on any failure.
+fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = format!("{path}.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 /// Migrate a store to a per-store keyfile: open it with the current `$MNEMA_KEY`, then
@@ -138,7 +153,7 @@ fn rekey(store: &str) {
     let blob = mem
         .seal(&new_key)
         .unwrap_or_else(|_| die("rekey: seal failed"));
-    std::fs::write(store, blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
+    write_atomic(store, &blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
     println!("rekeyed {store} under {}", keyfile.display());
 }
 

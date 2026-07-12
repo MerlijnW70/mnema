@@ -378,12 +378,26 @@ fn parse_tier(s: Option<&str>) -> EgressTier {
 fn persist<E: Embedder>(store: &mut Mnema<E>, path: &str, key: &[u8]) {
     match store.seal(key) {
         Ok(blob) => {
-            if let Err(e) = std::fs::write(path, blob) {
+            if let Err(e) = write_atomic(path, &blob) {
                 eprintln!("mnema-mcp: failed to write store to {path}: {e}");
             }
         }
         Err(e) => eprintln!("mnema-mcp: failed to seal store: {e:?}"),
     }
+}
+
+/// Write `bytes` to `path` durably: write a sibling `.tmp`, flush it to disk, then rename it
+/// over `path`. The rename is atomic within the directory, so `path` is always either the whole
+/// old store or the whole new one — a crash or full disk mid-write can never truncate it to a
+/// torn blob that would then fail to open. On any failure the original `path` is left untouched.
+fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = format!("{path}.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 /// Open the store at `path`, or start a fresh one **only if there is no file yet**. `make`
