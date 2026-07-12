@@ -63,7 +63,20 @@ fn serve<E: Embedder>(mut store: Mnema<E>, path: &str, key: &[u8]) {
     let mut stdout = std::io::stdout();
 
     for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
+        let line = match line {
+            Ok(l) => l,
+            // A per-line read error (e.g. a non-UTF-8 byte on stdin) is NOT end-of-input: report
+            // it and keep serving, so one bad byte can't silently kill the whole session. Only a
+            // genuine broken pipe / closed stdin ends the loop.
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                write_msg(
+                    &mut stdout,
+                    &error(Value::Null, -32700, "parse error: non-UTF-8 input"),
+                );
+                continue;
+            }
+            Err(_) => break,
+        };
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -223,6 +236,12 @@ fn tool_text(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
 }
 
+/// A tool result flagged as an error, so the agent sees the call failed rather than reading a
+/// failure string as a normal answer.
+fn tool_error(text: String) -> Value {
+    json!({ "content": [{ "type": "text", "text": text }], "isError": true })
+}
+
 /// Render a bundle as one `[id] text` line per item — the shared shape for `recall` and `recent`.
 fn render_items(items: &[BundleItem]) -> String {
     items
@@ -254,7 +273,10 @@ fn handle_tool_call<E: Embedder>(
     let text = match name {
         "remember" => {
             let content = arg_str("content");
-            let tier = parse_tier(args.get("tier").and_then(Value::as_str));
+            let tier = match parse_tier(args.get("tier").and_then(Value::as_str)) {
+                Ok(t) => t,
+                Err(e) => return tool_error(e),
+            };
             let importance = args
                 .get("importance")
                 .and_then(Value::as_f64)
@@ -262,7 +284,11 @@ fn handle_tool_call<E: Embedder>(
             // The redacted surface only bites on the redacted tier; empty for open/private.
             let redacted = arg_str("redacted");
             let id = store.remember_with(tier, importance, &content, &redacted);
-            persist(store, path, key);
+            if let Err(e) = persist(store, path, key) {
+                return tool_error(format!(
+                    "memory {id} is in RAM but was NOT saved to disk: {e}"
+                ));
+            }
             format!("remembered as memory {id}")
         }
         "recall" => {
@@ -295,9 +321,14 @@ fn handle_tool_call<E: Embedder>(
         }
         "remember_fact" => {
             let (s, a, v) = (arg_str("subject"), arg_str("attribute"), arg_str("value"));
-            let tier = parse_tier(args.get("tier").and_then(Value::as_str));
+            let tier = match parse_tier(args.get("tier").and_then(Value::as_str)) {
+                Ok(t) => t,
+                Err(e) => return tool_error(e),
+            };
             let res = store.remember_fact_tiered(&s, &a, &v, tier);
-            persist(store, path, key);
+            if let Err(e) = persist(store, path, key) {
+                return tool_error(format!("belief {s}.{a} is in RAM but was NOT saved: {e}"));
+            }
             // Don't echo a private value back, even in the storage confirmation.
             let shown = if tier == EgressTier::Private {
                 "<private>".to_string()
@@ -323,7 +354,9 @@ fn handle_tool_call<E: Embedder>(
         "reinforce" => {
             let id = args.get("id").and_then(Value::as_u64).unwrap_or(u64::MAX);
             if store.reinforce(id) {
-                persist(store, path, key);
+                if let Err(e) = persist(store, path, key) {
+                    return tool_error(format!("reinforced memory {id} but did NOT save: {e}"));
+                }
                 format!("reinforced memory {id}")
             } else {
                 format!("no memory with id {id}")
@@ -333,7 +366,9 @@ fn handle_tool_call<E: Embedder>(
             let half_life = args.get("half_life").and_then(Value::as_u64).unwrap_or(0);
             let threshold = args.get("threshold").and_then(Value::as_f64).unwrap_or(0.0) as f32;
             let receipt = store.prune_faded(half_life, threshold);
-            persist(store, path, key);
+            if let Err(e) = persist(store, path, key) {
+                return tool_error(format!("pruned in RAM but did NOT save: {e}"));
+            }
             format!(
                 "pruned {} faded memories; {} remain",
                 receipt.purged.len(),
@@ -343,7 +378,9 @@ fn handle_tool_call<E: Embedder>(
         "forget" => {
             let needle = arg_str("contains");
             let receipt = store.forget(|m| !needle.is_empty() && m.content.contains(&needle));
-            persist(store, path, key);
+            if let Err(e) = persist(store, path, key) {
+                return tool_error(format!("forgot in RAM but did NOT save: {e}"));
+            }
             format!(
                 "forgot {} memories; {} remain",
                 receipt.purged.len(),
@@ -357,33 +394,34 @@ fn handle_tool_call<E: Embedder>(
                 s.total, s.open, s.redacted, s.private, s.beliefs, s.private_beliefs, s.indexed
             )
         }
-        other => {
-            return json!({
-                "content": [{ "type": "text", "text": format!("unknown tool: {other}") }],
-                "isError": true
-            });
-        }
+        other => return tool_error(format!("unknown tool: {other}")),
     };
     tool_text(text)
 }
 
-fn parse_tier(s: Option<&str>) -> EgressTier {
+/// Resolve the egress tier from a tool argument. Absent → `Open` (the documented default), but an
+/// **unrecognised** tier string is rejected, not silently coerced: failing open to `Open` would let
+/// a caller's typo (`"Private"`, `"priv"`) store an intended-private memory at the shareable tier,
+/// which the next `Destination::Remote` recall would then leak. Fail closed, like the CLI's `tier`.
+fn parse_tier(s: Option<&str>) -> Result<EgressTier, String> {
     match s {
-        Some("private") => EgressTier::Private,
-        Some("redacted") => EgressTier::Redacted,
-        _ => EgressTier::Open,
+        None | Some("open") => Ok(EgressTier::Open),
+        Some("private") => Ok(EgressTier::Private),
+        Some("redacted") => Ok(EgressTier::Redacted),
+        Some(other) => Err(format!(
+            "unknown tier {other:?} — use \"open\", \"redacted\", or \"private\""
+        )),
     }
 }
 
-fn persist<E: Embedder>(store: &mut Mnema<E>, path: &str, key: &[u8]) {
-    match store.seal(key) {
-        Ok(blob) => {
-            if let Err(e) = write_atomic(path, &blob) {
-                eprintln!("mnema-mcp: failed to write store to {path}: {e}");
-            }
-        }
-        Err(e) => eprintln!("mnema-mcp: failed to seal store: {e:?}"),
-    }
+/// Seal and durably write the store. Returns an error message on failure so the caller can tell the
+/// agent the write did NOT stick — reporting success on a failed persist would make an agent believe
+/// a memory is saved when it is only in RAM and gone on restart.
+fn persist<E: Embedder>(store: &mut Mnema<E>, path: &str, key: &[u8]) -> Result<(), String> {
+    let blob = store
+        .seal(key)
+        .map_err(|e| format!("failed to seal store: {e:?}"))?;
+    write_atomic(path, &blob).map_err(|e| format!("failed to write store to {path}: {e}"))
 }
 
 /// Write `bytes` to `path` durably: write a sibling `.tmp`, flush it to disk, then rename it
@@ -421,6 +459,17 @@ fn open_store<E: Embedder>(path: &str, key: &[u8], make: impl Fn() -> E) -> Mnem
                 std::process::exit(1);
             }
         },
-        Err(_) => Mnema::new(make()),
+        // ONLY a genuinely absent file means "start fresh". Any other read error — a permission
+        // or sharing violation (common on Windows: AV, backup, a second instance), a transient
+        // I/O fault — must NOT start empty, or the next persist() would overwrite the real store
+        // that we simply failed to read. Refuse, exactly like the unopenable case.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Mnema::new(make()),
+        Err(e) => {
+            eprintln!(
+                "mnema-mcp: could not read {path} ({e}) — refusing to start so an existing store \
+                 is not overwritten by an empty one. Resolve the I/O error (or move the file) and retry."
+            );
+            std::process::exit(1);
+        }
     }
 }
