@@ -118,13 +118,14 @@ fn tools_list() -> Value {
         },
         {
             "name": "remember_fact",
-            "description": "Store a belief as (subject, attribute, value). A newer value supersedes an older contradicting one.",
+            "description": "Store a belief as (subject, attribute, value), optionally at a tier — a 'private' belief is never returned to a remote/cloud model. A newer value supersedes an older contradicting one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "subject": { "type": "string" },
                     "attribute": { "type": "string" },
-                    "value": { "type": "string" }
+                    "value": { "type": "string" },
+                    "tier": { "type": "string", "enum": ["open", "redacted", "private"], "description": "egress tier (default: open)" }
                 },
                 "required": ["subject", "attribute", "value"]
             }
@@ -203,9 +204,16 @@ fn handle_tool_call(
         }
         "remember_fact" => {
             let (s, a, v) = (arg_str("subject"), arg_str("attribute"), arg_str("value"));
-            let res = store.remember_fact(&s, &a, &v);
+            let tier = parse_tier(args.get("tier").and_then(Value::as_str));
+            let res = store.remember_fact_tiered(&s, &a, &v, tier);
             persist(store, path, key);
-            format!("belief {s}.{a} = {v:?} ({res:?})")
+            // Don't echo a private value back, even in the storage confirmation.
+            let shown = if tier == EgressTier::Private {
+                "<private>".to_string()
+            } else {
+                format!("{v:?}")
+            };
+            format!("belief {s}.{a} = {shown} ({res:?})")
         }
         "beliefs" => {
             let subject = arg_str("subject");
