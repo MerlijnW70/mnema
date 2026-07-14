@@ -21,10 +21,11 @@
 //! ## Embedder
 //!
 //! By default recall rides the zero-dependency [`HashEmbedder`] (a lexical bag-of-tokens vector).
-//! Built with `--features mcp,local-embed`, it instead loads the in-process semantic embedder
-//! (`all-MiniLM-L6-v2` via candle), so recall matches on *meaning*, not just shared words. The
-//! choice is fixed at compile time; a store is embedder-specific (the widths differ), so a given
-//! binary always opens the store it wrote.
+//! For meaning-based recall, build with one of: `--features mcp,http-embed` — embed via a local
+//! HTTP endpoint (Ollama / llama.cpp; see [`mnema::http_embed`]), the light path; or
+//! `--features mcp,local-embed` — an in-process `all-MiniLM-L6-v2` via candle, self-contained but a
+//! heavier build. The choice is fixed at compile time, and a store is embedder-specific (the widths
+//! differ), so a given binary always opens the store it wrote.
 
 use std::io::{BufRead, Write};
 
