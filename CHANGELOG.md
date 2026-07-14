@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
+## [0.1.3] - 2026-07-14
+
+### Fixed
+- Pointing `--path` (or `$MNEMA_PATH`) at a not-yet-created directory no longer fails with a
+  cryptic `cannot open lock file … path not found`. The CLI and server now create the store's
+  parent directory (`create_dir_all`) at the lock gate, with a clear error if that fails.
+
 ## [0.1.2] - 2026-07-14
 
 ### Added
@@ -74,6 +81,7 @@ Initial release: a local, encrypted memory layer for AI agents.
 - **Zero-friction install** — prebuilt binaries via `curl | sh` / PowerShell, plus `mnema keygen`
   for a strong `$MNEMA_KEY` passphrase.
 
+[0.1.3]: https://github.com/MerlijnW70/mnema/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/MerlijnW70/mnema/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/MerlijnW70/mnema/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/MerlijnW70/mnema/releases/tag/v0.1.0
