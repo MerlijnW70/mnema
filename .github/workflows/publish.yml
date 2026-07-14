@@ -24,4 +24,11 @@ jobs:
       - name: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish
+        # Publish the zero-dependency leaf first: the umbrella `mnema` depends on `mnema-core` by
+        # version, so it can only be published once `mnema-core` is live on the index. `cargo
+        # publish` waits for the uploaded crate to become available before returning, so the second
+        # publish resolves the dependency. If crates.io index propagation lags, re-run just the
+        # umbrella step (`cargo publish -p mnema`).
+        run: |
+          cargo publish -p mnema-core
+          cargo publish -p mnema
