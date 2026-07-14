@@ -71,16 +71,24 @@ fn save(store: &str, mem: &mut Mnema<HashEmbedder>) {
     write_atomic(store, &blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
 }
 
-/// Write `bytes` to `path` durably: write a sibling `.tmp`, flush it to disk, then rename it
-/// over `path`. The rename is atomic within the directory, so a crash or full disk mid-write
-/// can never leave `path` a torn blob — it stays either the whole old store or the whole new
-/// one, and the original is untouched on any failure.
 /// Take an exclusive advisory lock for the store via a sibling `<store>.lock`, returning the held
 /// `File` (drop to release; the OS releases on exit). A write command holds this across its
 /// load→mutate→save so it can't clobber, or be clobbered by, a concurrent writer (another `mnema`
 /// or a running `mnema-server`). Read-only commands don't lock — writes are atomic, so a reader sees
 /// the whole old or whole new store, never a torn one.
 fn lock_store(store: &str) -> std::fs::File {
+    // Create the store's directory if it doesn't exist yet, so a store path into a not-yet-created
+    // folder just works rather than failing with a cryptic "cannot open lock file … path not found".
+    if let Some(dir) = std::path::Path::new(store)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        die(&format!(
+            "cannot create store directory {}: {e}",
+            dir.display()
+        ));
+    }
     let lockpath = format!("{store}.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -96,6 +104,10 @@ fn lock_store(store: &str) -> std::fs::File {
     file
 }
 
+/// Write `bytes` to `path` durably: write a sibling `.tmp`, flush it to disk, then rename it
+/// over `path`. The rename is atomic within the directory, so a crash or full disk mid-write
+/// can never leave `path` a torn blob — it stays either the whole old store or the whole new
+/// one, and the original is untouched on any failure.
 fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = format!("{path}.tmp");
     {
