@@ -1,5 +1,8 @@
 /target
-Cargo.lock
+
+# Cargo.lock IS committed: mnema ships binaries + an MCP server, so releases, CI, `cargo audit`,
+# and `cargo deny` should all resolve to identical, pinned dependency versions (a transitive bump
+# can't silently enter a release). The zero-dependency `mnema-core` is unaffected either way.
 
 # Mnema stores are encrypted, machine-specific data — never source. `*.store` covers the
 # CLI/MCP default filename (`mnema.store`); `*.mnema` covers the documented extension.
@@ -11,6 +14,9 @@ Cargo.lock
 
 # Per-store advisory lock file (mnema-mcp / mnema hold this to prevent concurrent writers).
 *.lock
+# ...but Cargo.lock is committed on purpose (see the top of this file); the `*.lock` glob above
+# would otherwise swallow it.
+!Cargo.lock
 
 # This repo's own MCP store lives here (in-repo, never on C:). Encrypted + machine-specific.
 .mnema/
