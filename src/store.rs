@@ -17,6 +17,7 @@
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
+use zeroize::Zeroizing;
 
 use crate::{EgressTier, Memory, MemoryId, MemoryKind};
 
@@ -40,7 +41,11 @@ const VERSION_LEN: usize = 1;
 const HEADER_LEN: usize = VERSION_LEN + SALT_LEN + NONCE_LEN;
 
 /// Everything that can go wrong sealing, opening, or decoding a store.
+///
+/// `#[non_exhaustive]`: the versioned on-disk format will grow new failure modes over time, so
+/// downstream `match`es must keep a wildcard arm rather than break when a variant is added.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StoreError {
     /// Argon2id failed to derive a key from the passphrase + salt.
     KeyDerivation,
@@ -99,10 +104,10 @@ fn tier_from_tag(tag: u8) -> Result<EgressTier, StoreError> {
 }
 
 /// Derive a 32-byte key from a passphrase + salt with Argon2id (memory-hard).
-fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<[u8; 32], StoreError> {
-    let mut key = [0u8; 32];
+fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, StoreError> {
+    let mut key = Zeroizing::new([0u8; 32]);
     argon2()?
-        .hash_password_into(passphrase, salt, &mut key)
+        .hash_password_into(passphrase, salt, key.as_mut_slice())
         .map_err(|_| StoreError::KeyDerivation)?;
     Ok(key)
 }
@@ -347,7 +352,8 @@ pub(crate) fn seal_bytes(plaintext: &[u8], passphrase: &[u8]) -> Result<Vec<u8>,
     getrandom::getrandom(&mut nonce_bytes).map_err(|_| StoreError::Entropy)?;
 
     let key = derive_key(passphrase, &salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&key).map_err(|_| StoreError::KeyDerivation)?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key.as_slice()).map_err(|_| StoreError::KeyDerivation)?;
     let nonce = XNonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
@@ -387,7 +393,8 @@ fn split_sealed(bytes: &[u8]) -> Result<SealedParts<'_>, StoreError> {
 pub(crate) fn open_bytes(bytes: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, StoreError> {
     let (salt, nonce_bytes, ciphertext) = split_sealed(bytes)?;
     let key = derive_key(passphrase, salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&key).map_err(|_| StoreError::KeyDerivation)?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key.as_slice()).map_err(|_| StoreError::KeyDerivation)?;
     let nonce = XNonce::from_slice(nonce_bytes);
     cipher
         .decrypt(nonce, ciphertext)
@@ -407,9 +414,10 @@ pub(crate) fn open_bytes(bytes: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, Sto
 pub(crate) struct SealingKey {
     /// The passphrase this key was derived from — kept so a caller that seals with a *different*
     /// passphrase (e.g. `mnema rekey`) re-derives instead of silently reusing the old key.
-    passphrase: Vec<u8>,
+    /// Wrapped in [`Zeroizing`] so both it and the derived key are wiped from memory on drop.
+    passphrase: Zeroizing<Vec<u8>>,
     salt: [u8; SALT_LEN],
-    key: [u8; 32],
+    key: Zeroizing<[u8; 32]>,
 }
 
 impl SealingKey {
@@ -419,7 +427,7 @@ impl SealingKey {
         getrandom::getrandom(&mut salt).map_err(|_| StoreError::Entropy)?;
         let key = derive_key(passphrase, &salt)?;
         Ok(Self {
-            passphrase: passphrase.to_vec(),
+            passphrase: Zeroizing::new(passphrase.to_vec()),
             salt,
             key,
         })
@@ -429,7 +437,7 @@ impl SealingKey {
     pub(crate) fn for_salt(passphrase: &[u8], salt: [u8; SALT_LEN]) -> Result<Self, StoreError> {
         let key = derive_key(passphrase, &salt)?;
         Ok(Self {
-            passphrase: passphrase.to_vec(),
+            passphrase: Zeroizing::new(passphrase.to_vec()),
             salt,
             key,
         })
@@ -439,12 +447,16 @@ impl SealingKey {
     /// secret-vs-attacker comparison — it's the caller's own passphrase against itself — so a
     /// plain `==` is fine.
     pub(crate) fn matches(&self, passphrase: &[u8]) -> bool {
-        self.passphrase == passphrase
+        self.passphrase.as_slice() == passphrase
     }
 
     /// The salt prefixing a sealed blob (after the version byte), so the key can be
     /// reconstructed to open it. The version itself is validated on the `open` path.
     pub(crate) fn salt_of(blob: &[u8]) -> Result<[u8; SALT_LEN], StoreError> {
+        // Validate the length + format-version byte *before* the caller derives a key from these
+        // bytes: the facade's `open` runs `for_salt` (a memory-hard Argon2id pass) on the result,
+        // so a malformed/wrong-version blob must be rejected here rather than after a wasted KDF.
+        split_sealed(blob)?;
         let (salt, _) = take_slice(blob, VERSION_LEN, SALT_LEN)?;
         Ok(salt.try_into().unwrap())
     }
@@ -454,8 +466,8 @@ impl SealingKey {
     pub(crate) fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         getrandom::getrandom(&mut nonce_bytes).map_err(|_| StoreError::Entropy)?;
-        let cipher =
-            XChaCha20Poly1305::new_from_slice(&self.key).map_err(|_| StoreError::KeyDerivation)?;
+        let cipher = XChaCha20Poly1305::new_from_slice(self.key.as_slice())
+            .map_err(|_| StoreError::KeyDerivation)?;
         let nonce = XNonce::from_slice(&nonce_bytes);
         let ciphertext = cipher
             .encrypt(nonce, plaintext)
@@ -473,8 +485,8 @@ impl SealingKey {
     /// unknown format version is rejected before the key is touched.
     pub(crate) fn open(&self, blob: &[u8]) -> Result<Vec<u8>, StoreError> {
         let (_salt, nonce_bytes, ciphertext) = split_sealed(blob)?;
-        let cipher =
-            XChaCha20Poly1305::new_from_slice(&self.key).map_err(|_| StoreError::KeyDerivation)?;
+        let cipher = XChaCha20Poly1305::new_from_slice(self.key.as_slice())
+            .map_err(|_| StoreError::KeyDerivation)?;
         let nonce = XNonce::from_slice(nonce_bytes);
         cipher
             .decrypt(nonce, ciphertext)
@@ -883,5 +895,24 @@ mod tests {
         // next_id(8) then the first record's id(8); its kind tag is at offset 16.
         buf[16] = 0x7F; // out of range
         assert_eq!(EpisodicLog::decode(&buf), Err(StoreError::UnknownTag));
+    }
+
+    #[test]
+    fn salt_of_validates_the_version_before_returning_a_salt() {
+        // The facade's `open` runs a memory-hard KDF over `salt_of`'s result, so `salt_of` must
+        // reject a malformed/wrong-version blob up front rather than after that derivation.
+        let blob = seal_bytes(b"plaintext", b"pw").unwrap();
+        assert!(SealingKey::salt_of(&blob).is_ok()); // a valid blob still yields its salt
+
+        let mut wrong_version = blob.clone();
+        wrong_version[0] ^= 0xFF;
+        assert_eq!(
+            SealingKey::salt_of(&wrong_version),
+            Err(StoreError::UnknownVersion)
+        );
+        assert_eq!(
+            SealingKey::salt_of(&blob[..HEADER_LEN - 1]),
+            Err(StoreError::Truncated)
+        );
     }
 }
