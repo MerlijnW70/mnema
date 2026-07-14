@@ -1,0 +1,38 @@
+name: security-audit
+
+# Scan the dependency tree for RustSec advisories. Runs when dependencies change, on every PR,
+# and — crucially — on a weekly schedule so a newly-published advisory against an existing
+# dependency is caught even when nothing in the repo changed. Fails on any vulnerability, and on
+# any advisory not explicitly accepted in .cargo/audit.toml (currently two unmaintained-crate
+# warnings that are reachable only through the opt-in `local-embed` ML stack).
+on:
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - ".cargo/audit.toml"
+      - ".github/workflows/security-audit.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - ".cargo/audit.toml"
+      - ".github/workflows/security-audit.yml"
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Generate lockfile (Cargo.lock is gitignored)
+        run: cargo generate-lockfile
+      - name: cargo audit — fail on any vulnerability or unaccepted advisory
+        run: cargo audit --deny warnings
