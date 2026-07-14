@@ -1,3 +1,8 @@
+# A two-crate workspace: `mnema-core` is the strictly zero-dependency, `noha gate`-certified leaf;
+# this umbrella `mnema` package re-exports it and adds the opt-in, dependency-carrying features.
+[workspace]
+members = ["mnema-core"]
+
 [package]
 name = "mnema"
 version = "0.1.1"
@@ -13,6 +18,11 @@ categories = ["data-structures", "database-implementations"]
 exclude = ["docs", "scripts", ".gitignore"]
 
 [dependencies]
+# The zero-dependency core — the egress invariant, memory model, and pure-logic stores. This is the
+# ONLY non-optional dependency, and it is itself a zero-dependency leaf (path within the workspace; the
+# version pin keeps a crates.io publish honest).
+mnema-core = { path = "mnema-core", version = "0.1.1" }
+
 # The `secure` feature (encryption at rest for the episodic store + the Mnema facade):
 # a small, vetted, safe-Rust crypto set — OPTIONAL, so the core (retrieval, semantic,
 # working, vector, egress) stays zero-dependency by default. See docs/adr/0020.
