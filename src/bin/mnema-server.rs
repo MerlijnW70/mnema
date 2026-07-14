@@ -28,7 +28,7 @@
 
 use std::io::{BufRead, Write};
 
-#[cfg(not(feature = "local-embed"))]
+#[cfg(not(any(feature = "local-embed", feature = "http-embed")))]
 use mnema::embed::HashEmbedder;
 use mnema::facade::Mnema;
 use mnema::vector::Embedder;
@@ -118,6 +118,8 @@ fn main() {
 
     // The embedder is chosen at compile time. `serve` is generic over it, so the whole server
     // is identical either way — only the vector arm of recall differs (lexical vs semantic).
+    // Embedder precedence: an in-process candle model (`local-embed`), else a local HTTP embeddings
+    // endpoint (`http-embed`), else the zero-dependency lexical `HashEmbedder`.
     #[cfg(feature = "local-embed")]
     let store = open_store(&path, &key, || {
         mnema::model_embed::MiniLmEmbedder::load().unwrap_or_else(|e| {
@@ -125,7 +127,17 @@ fn main() {
             std::process::exit(1);
         })
     });
-    #[cfg(not(feature = "local-embed"))]
+    #[cfg(all(feature = "http-embed", not(feature = "local-embed")))]
+    let store = open_store(&path, &key, || {
+        mnema::http_embed::HttpEmbedder::from_env().unwrap_or_else(|e| {
+            eprintln!(
+                "mnema-server: could not reach the embeddings endpoint ({e}). Is your local \
+                 embedding server running? Set $MNEMA_EMBED_URL / $MNEMA_EMBED_MODEL."
+            );
+            std::process::exit(1);
+        })
+    });
+    #[cfg(not(any(feature = "local-embed", feature = "http-embed")))]
     let store = open_store(&path, &key, || {
         HashEmbedder::new(HashEmbedder::DEFAULT_DIMS)
     });
