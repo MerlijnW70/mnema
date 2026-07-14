@@ -13,8 +13,10 @@
 //!
 //! This is **below-waterline glue**: it speaks line-delimited JSON-RPC and persists the store,
 //! but every real decision — the egress wall, contradiction resolution, packing — lives in the
-//! mutation-pinned [`mnema`] facade. Notably, `recall` runs against `Destination::Remote`, so a
-//! `Private` memory can never leave through this tool.
+//! mutation-pinned [`mnema`] facade. By default `recall` runs against `Destination::Remote`, so a
+//! `Private` memory can never leave through this tool. Launching with `--local` (or `$MNEMA_LOCAL`)
+//! switches recall to `Destination::Local` so an **on-device** model can read Private memories —
+//! a deployment choice set at startup, never a per-call one, so a caller can't open the wall itself.
 //!
 //! ## Embedder
 //!
@@ -36,11 +38,26 @@ use serde_json::{Value, json};
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The store path: `--path <file>` if given, else `$MNEMA_PATH`, else `mnema.store`. Also handles
-/// `--help`. An MCP client can pass `args: ["--path", "…"]` or set the env var — either works.
-fn resolve_path() -> String {
+/// The server's launch configuration.
+struct ServerConfig {
+    /// The store path: `--path <file>` if given, else `$MNEMA_PATH`, else `mnema.store`.
+    path: String,
+    /// The egress destination applied to *every* recall for the whole session. `Remote` (the
+    /// default) filters out Private memories — correct when this server feeds a cloud model.
+    /// `--local` (or `$MNEMA_LOCAL`) sets `Local`, so recall may return Private memories — use it
+    /// ONLY when the server feeds an on-device model. It is a **deployment** decision set at launch,
+    /// never a per-call argument, so a caller/model can never flip the egress wall open itself.
+    dest: Destination,
+}
+
+/// Parse `--path`, `--local`, `--help`. An MCP client can pass `args: ["--path", "…", "--local"]`
+/// or set `$MNEMA_PATH` / `$MNEMA_LOCAL` — either works.
+fn resolve_config() -> ServerConfig {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut path = None;
+    let mut local = std::env::var("MNEMA_LOCAL")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -51,11 +68,14 @@ fn resolve_path() -> String {
                     std::process::exit(2);
                 }));
             }
+            "--local" => local = true,
             "-h" | "--help" => {
                 println!(
                     "mnema-server — MCP memory server (stdio JSON-RPC)\n\n\
-                     USAGE: mnema-server [--path <store>]\n\n\
+                     USAGE: mnema-server [--path <store>] [--local]\n\n\
                      Store path: --path, else $MNEMA_PATH, else ./mnema.store.\n\
+                     --local (or $MNEMA_LOCAL=1): recall may return Private memories — set this ONLY\n\
+                     when the server feeds an on-device model, never a cloud one.\n\
                      $MNEMA_KEY sets a passphrase; omit it for an auto-generated <store>.key."
                 );
                 std::process::exit(0);
@@ -67,12 +87,20 @@ fn resolve_path() -> String {
         }
         i += 1;
     }
-    path.or_else(|| std::env::var("MNEMA_PATH").ok())
-        .unwrap_or_else(|| "mnema.store".to_string())
+    let path = path
+        .or_else(|| std::env::var("MNEMA_PATH").ok())
+        .unwrap_or_else(|| "mnema.store".to_string());
+    let dest = if local {
+        Destination::Local
+    } else {
+        Destination::Remote
+    };
+    ServerConfig { path, dest }
 }
 
 fn main() {
-    let path = resolve_path();
+    let cfg = resolve_config();
+    let path = cfg.path;
     // Hold an exclusive advisory lock on the store for the whole session. A resident server keeps
     // the store in RAM and re-seals it on every write, so a second concurrent writer's records
     // would be silently clobbered by the next re-seal. `_lock` lives to the end of main; the OS
@@ -102,11 +130,12 @@ fn main() {
         HashEmbedder::new(HashEmbedder::DEFAULT_DIMS)
     });
 
-    serve(store, &path, &key);
+    serve(store, &path, &key, cfg.dest);
 }
 
-/// The JSON-RPC read/dispatch/persist loop, generic over the embedder in play.
-fn serve<E: Embedder>(mut store: Mnema<E>, path: &str, key: &[u8]) {
+/// The JSON-RPC read/dispatch/persist loop, generic over the embedder in play. `dest` is the
+/// launch-time egress destination (see [`ServerConfig`]) applied to every recall.
+fn serve<E: Embedder>(mut store: Mnema<E>, path: &str, key: &[u8], dest: Destination) {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -142,7 +171,7 @@ fn serve<E: Embedder>(mut store: Mnema<E>, path: &str, key: &[u8]) {
             "initialize" => write_msg(&mut stdout, &reply(id, initialize_result())),
             "tools/list" => write_msg(&mut stdout, &reply(id, tools_list())),
             "tools/call" => {
-                let r = handle_tool_call(&mut store, path, key, req.get("params"));
+                let r = handle_tool_call(&mut store, path, key, dest, req.get("params"));
                 write_msg(&mut stdout, &reply(id, r));
             }
             "ping" => write_msg(&mut stdout, &reply(id, json!({}))),
@@ -273,6 +302,18 @@ fn tools_list() -> Value {
             }
         },
         {
+            "name": "forget_fact",
+            "description": "Hard-delete beliefs about a subject — all of them, or only one attribute if 'attribute' is given. Use this to correct or remove a wrong or stale belief (the belief equivalent of 'forget').",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "subject": { "type": "string" },
+                    "attribute": { "type": "string", "description": "optional; if omitted, every belief about the subject is removed" }
+                },
+                "required": ["subject"]
+            }
+        },
+        {
             "name": "stats",
             "description": "A privacy census of the store: memory and belief counts broken down by egress tier (how much is open vs. private) — counts only, no content.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -303,6 +344,7 @@ fn handle_tool_call<E: Embedder>(
     store: &mut Mnema<E>,
     path: &str,
     key: &[u8],
+    dest: Destination,
     params: Option<&Value>,
 ) -> Value {
     let params = params.cloned().unwrap_or(Value::Null);
@@ -347,7 +389,7 @@ fn handle_tool_call<E: Embedder>(
             // without time decay; a positive value also biases toward recent memories.
             // Destination::Remote drops Private memories at the egress wall either way.
             let half_life = args.get("half_life").and_then(Value::as_u64).unwrap_or(0);
-            let hits = store.recall_decayed(&query, Destination::Remote, k, budget, half_life);
+            let hits = store.recall_decayed(&query, dest, k, budget, half_life);
             if hits.is_empty() {
                 "(no relevant memories)".to_string()
             } else {
@@ -359,7 +401,7 @@ fn handle_tool_call<E: Embedder>(
             let budget = args.get("budget").and_then(Value::as_u64).unwrap_or(2000) as usize;
             // recall_recent is newest-first and egress-filtered (Private never leaves), so
             // taking the first k yields the k most recent shareable memories within budget.
-            let mut items = store.recall_recent(Destination::Remote, budget);
+            let mut items = store.recall_recent(dest, budget);
             items.truncate(k);
             if items.is_empty() {
                 "(no memories yet)".to_string()
@@ -387,8 +429,9 @@ fn handle_tool_call<E: Embedder>(
         }
         "beliefs" => {
             let subject = arg_str("subject");
-            // Destination::Remote applies the egress wall: Private beliefs are withheld.
-            let facts = store.beliefs(&subject, Destination::Remote);
+            // The launch-time `dest` applies the egress wall: with the default Remote, Private
+            // beliefs are withheld; a `--local` server may surface them.
+            let facts = store.beliefs(&subject, dest);
             if facts.is_empty() {
                 format!("(nothing known about {subject})")
             } else {
@@ -398,6 +441,27 @@ fn handle_tool_call<E: Embedder>(
                     .collect::<Vec<_>>()
                     .join("\n")
             }
+        }
+        "forget_fact" => {
+            let subject = arg_str("subject");
+            let attribute = arg_str("attribute");
+            if subject.is_empty() {
+                return tool_error("forget_fact needs a 'subject'".to_string());
+            }
+            // Delete every belief for the subject, or only the given attribute if one is supplied.
+            // Hard delete (live + superseded), mirroring episodic `forget`.
+            let removed = store.forget_facts(|f| {
+                f.subject == subject && (attribute.is_empty() || f.attribute == attribute)
+            });
+            if let Err(e) = persist(store, path, key) {
+                return tool_error(format!("forgot beliefs in RAM but did NOT save: {e}"));
+            }
+            let what = if attribute.is_empty() {
+                subject.clone()
+            } else {
+                format!("{subject}.{attribute}")
+            };
+            format!("forgot {removed} belief record(s) for {what}")
         }
         "reinforce" => {
             let id = args.get("id").and_then(Value::as_u64).unwrap_or(u64::MAX);
@@ -602,6 +666,46 @@ mod tests {
                 "tier {bad:?} must be rejected, not coerced to a shareable tier"
             );
         }
+    }
+
+    #[test]
+    fn recall_honors_the_launch_destination_for_private_memories() {
+        use mnema::embed::HashEmbedder;
+        use mnema::facade::Mnema;
+        // The egress wall is set by the server's launch destination, never by the caller. A
+        // default (Remote) server must withhold a Private memory; a --local server may surface it.
+        let mut store = Mnema::new(HashEmbedder::new(HashEmbedder::DEFAULT_DIMS));
+        store.remember(EgressTier::Open, "public trip to japan");
+        store.remember(EgressTier::Private, "secret sk-live key");
+        let call = json!({"name": "recall", "arguments": {"query": "japan key secret", "k": 10}});
+
+        // recall is read-only (no persist), so path/key are unused here.
+        let remote = handle_tool_call(
+            &mut store,
+            "unused",
+            b"unused",
+            Destination::Remote,
+            Some(&call),
+        );
+        let rtext = remote["content"][0]["text"].as_str().unwrap();
+        assert!(
+            !rtext.contains("sk-live"),
+            "Remote recall must never leak a Private memory: {rtext}"
+        );
+        assert!(rtext.contains("japan"));
+
+        let local = handle_tool_call(
+            &mut store,
+            "unused",
+            b"unused",
+            Destination::Local,
+            Some(&call),
+        );
+        let ltext = local["content"][0]["text"].as_str().unwrap();
+        assert!(
+            ltext.contains("sk-live"),
+            "a --local server may surface a Private memory: {ltext}"
+        );
     }
 
     #[test]

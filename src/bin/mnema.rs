@@ -15,13 +15,18 @@
 //! to the old passphrase) re-seals it under a fresh keyfile.
 //!
 //! Usage:
-//!   mnema remember <store> <open|redacted|private> <content>   # prints the new id
-//!   mnema fact     <store> <subject> <attribute> <value>       # prints the resolution
-//!   mnema recall   <store> <k> <query>                         # prints k memories
-//!   mnema stats    <store>
-//!   mnema prune    <store> <half_life> <threshold>             # forget faded memories
-//!   mnema rekey    <store>   # $MNEMA_KEY = old passphrase; re-seals under a new keyfile
-//!   mnema keygen              # print a strong random passphrase to use as $MNEMA_KEY
+//!   mnema remember    <store> <open|redacted|private> <content>   # prints the new id
+//!   mnema fact        <store> <subject> <attribute> <value>       # prints the resolution
+//!   mnema recall      <store> <k> <query>                         # prints k memories
+//!   mnema recent      <store> <k>                                 # k most recent memories
+//!   mnema beliefs     <store> <subject>                           # live beliefs about subject
+//!   mnema reinforce   <store> <id>                                # strengthen a memory
+//!   mnema forget      <store> <substring>                         # hard-delete matching memories
+//!   mnema forget-fact <store> <subject> [attribute]               # hard-delete beliefs
+//!   mnema stats       <store>
+//!   mnema prune       <store> <half_life> <threshold>             # forget faded memories
+//!   mnema rekey       <store>   # $MNEMA_KEY = old passphrase; re-seals under a new keyfile
+//!   mnema keygen                # print a strong random passphrase to use as $MNEMA_KEY
 
 use std::io::Write;
 use std::path::Path;
@@ -243,6 +248,63 @@ fn main() {
                 receipt.remaining
             );
         }
+        ("recent", 3) => {
+            let store = &args[1];
+            let k: usize = args[2]
+                .parse()
+                .unwrap_or_else(|_| die("k must be a number"));
+            // A local tool: Destination::Local, so Private memories are visible to their owner.
+            let mut items = load(store).recall_recent(Destination::Local, 100_000);
+            items.truncate(k);
+            for item in items {
+                println!("[{}] {}", item.id, item.text);
+            }
+        }
+        ("beliefs", 3) => {
+            let store = &args[1];
+            for f in load(store).beliefs(&args[2], Destination::Local) {
+                println!("{}.{} = {}", f.subject, f.attribute, f.value);
+            }
+        }
+        ("reinforce", 3) => {
+            let store = &args[1];
+            let id: u64 = args[2]
+                .parse()
+                .unwrap_or_else(|_| die("id must be a number"));
+            let _lock = lock_store(store);
+            let mut mem = load(store);
+            if mem.reinforce(id) {
+                save(store, &mut mem);
+                println!("reinforced {id}");
+            } else {
+                die(&format!("no memory with id {id}"));
+            }
+        }
+        ("forget", 3) => {
+            let store = &args[1];
+            let needle = &args[2];
+            let _lock = lock_store(store);
+            let mut mem = load(store);
+            let receipt = mem.forget(|m| m.content.contains(needle.as_str()));
+            save(store, &mut mem);
+            println!(
+                "forgot {}  remaining {}",
+                receipt.purged.len(),
+                receipt.remaining
+            );
+        }
+        ("forget-fact", 3) | ("forget-fact", 4) => {
+            let store = &args[1];
+            let subject = &args[2];
+            let attribute = args.get(3).cloned().unwrap_or_default();
+            let _lock = lock_store(store);
+            let mut mem = load(store);
+            let removed = mem.forget_facts(|f| {
+                f.subject == *subject && (attribute.is_empty() || f.attribute == attribute)
+            });
+            save(store, &mut mem);
+            println!("forgot {removed} belief record(s)");
+        }
         ("rekey", 2) => rekey(&args[1]),
         ("keygen", 1) => {
             // A strong random passphrase to set as $MNEMA_KEY (e.g. `export MNEMA_KEY=$(mnema keygen)`).
@@ -254,7 +316,7 @@ fn main() {
             );
         }
         _ => die(
-            "usage: mnema remember|recall|fact|stats|prune|rekey <store> ... | keygen  (see the source header)",
+            "usage: mnema remember|recall|recent|fact|beliefs|reinforce|forget|forget-fact|stats|prune|rekey <store> ... | keygen  (see the source header)",
         ),
     }
 }
