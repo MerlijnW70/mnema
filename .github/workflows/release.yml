@@ -96,6 +96,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # `gh release` needs a repo context (it shells out to git), so check out first.
+      - uses: actions/checkout@v4
       - name: Generate and upload SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
