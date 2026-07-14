@@ -64,5 +64,9 @@ jobs:
       - run: cargo build
       # The MCP server must build under its feature.
       - run: cargo build --features mcp --bin mnema-server
+      # The optional HTTP embedder (semantic recall via a local endpoint) must build, and its
+      # request/response logic is unit-tested.
+      - run: cargo build --features mcp,http-embed --bin mnema-server
+      - run: cargo test --features http-embed --lib http_embed
       # The zero-dependency core must stay WebAssembly-compatible (browser / edge).
       - run: cargo build -p mnema-core --target wasm32-unknown-unknown
