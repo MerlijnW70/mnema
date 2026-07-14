@@ -79,13 +79,21 @@ Your agent now has `remember`, `recall`, `recent`, and more. Everything stays on
 |---|---|
 | `mnema remember <store> <tier> <text>` | Store a memory (`tier` = `open` / `redacted` / `private`) |
 | `mnema recall <store> <k> <query>` | Retrieve the most relevant memories |
+| `mnema recent <store> <k>` | List the `k` most recent memories |
 | `mnema fact <store> <subject> <attribute> <value>` | Store a belief (a newer value supersedes an older one) |
+| `mnema beliefs <store> <subject>` | List the live beliefs about a subject |
+| `mnema reinforce <store> <id>` | Strengthen a memory so it resists forgetting |
+| `mnema forget <store> <substring>` | Hard-delete memories containing a substring |
+| `mnema forget-fact <store> <subject> [attribute]` | Hard-delete beliefs about a subject |
 | `mnema stats <store>` | Memory health — counts by privacy tier |
 | `mnema prune <store> <half_life> <threshold>` | Forget faded memories |
 | `mnema keygen` | Print a strong passphrase to use as `MNEMA_KEY` |
 | `mnema rekey <store>` | Re-encrypt the store under a fresh key |
 
-Over MCP your agent also gets **recent**, **beliefs**, **reinforce**, and **forget**.
+The MCP server exposes the same surface as tools — `remember`, `recall`, `recent`, `remember_fact`,
+`beliefs`, `forget`, `forget_fact`, `reinforce`, `prune`, `stats`. By default recall never returns
+`private` memories; launch `mnema-server --local` **only when it feeds an on-device model** to let
+recall surface them.
 
 ## Keys
 
