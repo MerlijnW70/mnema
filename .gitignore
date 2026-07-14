@@ -12,6 +12,9 @@ Cargo.lock
 # Per-store advisory lock file (mnema-mcp / mnema hold this to prevent concurrent writers).
 *.lock
 
+# This repo's own MCP store lives here (in-repo, never on C:). Encrypted + machine-specific.
+.mnema/
+
 # Project-scoped MCP config: machine-specific store path. Keep out of source control.
 .mcp.json
 
