@@ -226,7 +226,11 @@ impl SemanticStore {
         status: FactStatus,
         tier: EgressTier,
     ) -> FactId {
-        let id = self.facts.len() as FactId;
+        // A fresh id strictly greater than every existing one. `len()` would reuse an id after a
+        // `forget` removed the highest-id fact, colliding with a surviving fact that still holds
+        // it; taking `max + 1` keeps each surviving fact's handle unique. O(n) per push, which is
+        // negligible for a belief set.
+        let id = self.facts.iter().map(|f| f.id).max().map_or(0, |m| m + 1);
         self.facts.push(Fact {
             id,
             subject,
@@ -503,5 +507,27 @@ mod tests {
         assert_eq!(purged, 2, "both the live and superseded alice records go");
         assert!(s.current("alice", "diet").is_none());
         assert!(s.current("bob", "city").is_some()); // unrelated belief survives
+    }
+
+    #[test]
+    fn fact_ids_stay_unique_after_forgetting_a_low_id_fact() {
+        // Forgetting a low-id fact while higher ids survive must not let a later assert reuse an id
+        // a surviving fact still holds. A `len()`-based id would collide here; `max + 1` does not.
+        let mut s = SemanticStore::new();
+        s.assert("a", "x", "1", 1); // id 0
+        s.assert("b", "y", "2", 1); // id 1
+        s.assert("c", "z", "3", 1); // id 2
+        s.forget(|f| f.subject == "a"); // removes id 0; ids 1 and 2 survive, len is now 2
+        s.assert("d", "w", "4", 2); // a `len()` id would be 2 → collides with the surviving id 2
+        let ids: Vec<FactId> = s.facts().iter().map(|f| f.id).collect();
+        let mut uniq = ids.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), ids.len(), "fact ids must stay unique: {ids:?}");
+        assert_eq!(
+            *ids.last().unwrap(),
+            3,
+            "the new fact takes max+1 = 3, not the colliding 2"
+        );
     }
 }
