@@ -483,7 +483,20 @@ fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path)?;
+    // Durability: a rename's directory entry is not on stable storage until the parent directory
+    // is fsynced (POSIX). Best-effort — the rename is already atomic, so skipping this never
+    // corrupts the store; it only weakens the "an acknowledged write survives power loss"
+    // guarantee, so a dir-fsync failure doesn't fail the write.
+    #[cfg(unix)]
+    if let Some(dir) = std::path::Path::new(path)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        && let Ok(d) = std::fs::File::open(dir)
+    {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 /// Take an exclusive advisory lock for the store via a sibling `<path>.lock`, returning the held
@@ -544,6 +557,32 @@ fn open_store<E: Embedder>(path: &str, key: &[u8], make: impl Fn() -> E) -> Mnem
                  is not overwritten by an empty one. Resolve the I/O error (or move the file) and retry."
             );
             std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_tier_defaults_to_open_and_maps_known_tiers() {
+        assert_eq!(parse_tier(None), Ok(EgressTier::Open));
+        assert_eq!(parse_tier(Some("open")), Ok(EgressTier::Open));
+        assert_eq!(parse_tier(Some("redacted")), Ok(EgressTier::Redacted));
+        assert_eq!(parse_tier(Some("private")), Ok(EgressTier::Private));
+    }
+
+    #[test]
+    fn parse_tier_fails_closed_on_an_unrecognized_tier() {
+        // The security-load-bearing branch: a typo must be REJECTED, never silently coerced to
+        // Open — coercing an intended-Private memory to Open would leak it on the next Remote
+        // recall. Case matters too ("Private" is not "private").
+        for bad in ["Private", "priv", "secret", "PRIVATE", "", "opened"] {
+            assert!(
+                parse_tier(Some(bad)).is_err(),
+                "tier {bad:?} must be rejected, not coerced to a shareable tier"
+            );
         }
     }
 }
