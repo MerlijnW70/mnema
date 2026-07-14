@@ -1,0 +1,65 @@
+name: installer-test
+
+# Prove the documented one-line installers actually work end-to-end on real machines: they fetch
+# the LATEST GitHub Release binaries, install them to PATH, and run. Complements the crates.io
+# build and the Homebrew tap's install-test. Runs the exact commands from the README.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - ".github/workflows/installer-test.yml"
+
+jobs:
+  curl-sh:
+    name: curl | sh (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install via the curl | sh one-liner (from the commit under test)
+        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" | sh
+
+      - name: Run the installed binaries end-to-end
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v mnema
+          command -v mnema-server
+          mnema-server --help
+          key="$(mnema keygen)"; [ "${#key}" -eq 64 ]
+          export MNEMA_KEY="$key"
+          store="$RUNNER_TEMP/fresh/nested/dir/t.store"   # dir does not exist yet
+          mnema remember "$store" open 'hello via the curl installer'
+          mnema remember "$store" private 'a secret'
+          mnema stats "$store"
+          mnema recall "$store" 5 hello
+          test -f "$store"
+
+  powershell:
+    name: irm | iex (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Install via the irm | iex one-liner (from the commit under test)
+        shell: pwsh
+        run: irm "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.ps1" | iex
+
+      - name: Run the installed binaries end-to-end
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:LOCALAPPDATA 'mnema\bin'
+          $env:PATH = "$bin;$env:PATH"
+          & mnema-server --help
+          $key = (& mnema keygen).Trim()
+          if ($key.Length -ne 64) { throw "keygen wrong length: $($key.Length)" }
+          $env:MNEMA_KEY = $key
+          $store = Join-Path $env:RUNNER_TEMP 'fresh\nested\dir\t.store'   # dir does not exist yet
+          & mnema remember $store open 'hello via the powershell installer'
+          & mnema remember $store private 'a secret'
+          & mnema stats $store
+          & mnema recall $store 5 hello
+          if (-not (Test-Path $store)) { throw "store was not created" }
