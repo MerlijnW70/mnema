@@ -19,11 +19,20 @@ if ($arch -ne 'AMD64') {
 }
 $target = 'x86_64-pc-windows-msvc'
 
-# Resolve the release tag.
+# Resolve the release tag WITHOUT the unauthenticated GitHub API (rate-limited per IP, so it 403s
+# behind shared NAT or CI): the /releases/latest URL redirects to /releases/tag/<tag>, so read the
+# redirect's Location header. Uses .NET WebRequest so it works on Windows PowerShell 5.1 and 7.
 $tag = $env:MNEMA_VERSION
 if (-not $tag) {
-    $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
-    $tag = $rel.tag_name
+    try {
+        $req = [System.Net.HttpWebRequest]::Create("https://github.com/$repo/releases/latest")
+        $req.AllowAutoRedirect = $false
+        $req.UserAgent = 'mnema-install'
+        $resp = $req.GetResponse()
+        $tag = $resp.Headers['Location'] -replace '.*/tag/', ''
+        $resp.Close()
+    }
+    catch {}
 }
 if (-not $tag) { throw "could not resolve the latest release — set MNEMA_VERSION (e.g. v0.1.0)" }
 
@@ -42,7 +51,7 @@ try {
     Copy-Item (Join-Path $src 'mnema.exe') $binDir -Force
     Copy-Item (Join-Path $src 'mnema-server.exe') $binDir -Force
 
-    Write-Host "Installed mnema $tag to $binDir:"
+    Write-Host "Installed mnema $tag to ${binDir}:"
     Write-Host "  $binDir\mnema.exe        (CLI)"
     Write-Host "  $binDir\mnema-server.exe    (MCP server)"
 

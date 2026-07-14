@@ -36,10 +36,13 @@ esac
 target="${arch_part}-${os_part}"
 
 # --- resolve the release tag --------------------------------------------------
+# Resolve the latest tag WITHOUT the unauthenticated GitHub API (rate-limited to 60 req/hr per IP,
+# so it 403s behind shared NAT or CI): the /releases/latest page redirects to /releases/tag/<tag>,
+# so follow the redirect and take the final URL's last path segment.
 tag="${MNEMA_VERSION:-}"
 if [ -z "$tag" ]; then
-	tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-		grep '"tag_name"' | head -1 | cut -d '"' -f4)"
+	tag="$(curl -fsSLo /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" |
+		sed 's#.*/tag/##')"
 fi
 [ -n "$tag" ] || err "could not resolve the latest release — set MNEMA_VERSION (e.g. v0.1.0)"
 
