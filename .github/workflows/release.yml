@@ -89,3 +89,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.ref_name }}" "$ASSET" --clobber
+
+  # After every platform asset is uploaded, publish a single SHA256SUMS the installers verify
+  # against — so `curl | sh` / `irm | iex` can't be silently fed a tampered or corrupt binary.
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate and upload SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            --pattern '*.tar.gz' --pattern '*.zip' --dir "$tmp"
+          ( cd "$tmp" && sha256sum mnema-* > SHA256SUMS && cat SHA256SUMS )
+          gh release upload "${{ github.ref_name }}" "$tmp/SHA256SUMS" --clobber

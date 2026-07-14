@@ -54,6 +54,27 @@ trap 'rm -rf "$tmp"' EXIT
 
 echo "Downloading $asset ..."
 curl -fsSL "$url" -o "$tmp/mnema.tar.gz" || err "download failed: $url"
+
+# --- verify against the release's SHA256SUMS ----------------------------------
+# The install one-liner must not blindly trust whatever the URL serves. Fetch the release's
+# signed-by-GitHub SHA256SUMS and check the download against it; refuse on mismatch or if the
+# release predates checksums (v0.1.4+).
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+	sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+	err "need sha256sum or shasum to verify the download"
+fi
+curl -fsSL "https://github.com/$REPO/releases/download/${tag}/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
+	err "could not fetch SHA256SUMS for $tag — refusing to install unverified (releases before v0.1.4 have none; set MNEMA_VERSION=v0.1.4 or later)"
+expected="$(grep -F -- "$asset" "$tmp/SHA256SUMS" | awk '{print $1}' | head -1)"
+[ -n "$expected" ] || err "SHA256SUMS has no entry for $asset — refusing to install unverified"
+actual="$(sha256 "$tmp/mnema.tar.gz")"
+[ "$actual" = "$expected" ] ||
+	err "checksum mismatch for $asset — refusing to install (expected $expected, got $actual)"
+echo "Verified $asset (sha256 OK)."
+
 tar xzf "$tmp/mnema.tar.gz" -C "$tmp"
 
 # --- install ------------------------------------------------------------------
