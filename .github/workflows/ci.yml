@@ -15,9 +15,12 @@ jobs:
         with:
           toolchain: "1.96"
           components: rustfmt, clippy
+      # `--all` formats the whole workspace (umbrella + mnema-core).
       - run: cargo fmt --all --check
-      # The mutation gate's own guard: the library under `secure`.
-      - run: cargo clippy --all-targets --features secure -- -D warnings
+      # The zero-dependency core, held to warnings-as-errors on its own (no features exist there).
+      - run: cargo clippy -p mnema-core --all-targets -- -D warnings
+      # The mutation gate's own guard: the umbrella library under `secure`.
+      - run: cargo clippy --features secure -- -D warnings
       # The MCP server binary under its feature.
       - run: cargo clippy --bin mnema-server --features mcp -- -D warnings
 
@@ -33,7 +36,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.96"
-      # Exactly what the local quality gate runs.
+      # The zero-dependency core, on its own (its tests carry the egress-privacy invariant).
+      - run: cargo test -p mnema-core
+      # The umbrella under `secure` — exactly what the local quality gate runs.
       - run: cargo test --features secure
 
   build:
@@ -45,9 +50,19 @@ jobs:
         with:
           toolchain: "1.96"
           targets: wasm32-unknown-unknown
-      # The default build must stay zero-dependency (no features → core only).
+      # The core must stay a strictly zero-dependency leaf. `mnema-core` is a separate crate precisely so
+      # this is mechanically true, not aspirational: its `cargo tree` must be a single line (itself, no
+      # edges). This is the repo-agnostic CI enforcement; a developer's local `internal-tool gate` adds the fuller
+      # source-level certification (no non-std/local `use`, `forbid(unsafe_code)`).
+      - name: mnema-core is a zero-dependency leaf
+        run: |
+          tree=$(cargo tree -p mnema-core -e normal --prefix none)
+          echo "$tree"
+          test "$(printf '%s\n' "$tree" | grep -c .)" -eq 1 \
+            || { echo "::error::mnema-core gained a dependency — the zero-dependency core is broken"; exit 1; }
+      # The default umbrella build must stay zero-dependency too (no features → re-exports core only).
       - run: cargo build
       # The MCP server must build under its feature.
       - run: cargo build --features mcp --bin mnema-server
       # The zero-dependency core must stay WebAssembly-compatible (browser / edge).
-      - run: cargo build --target wasm32-unknown-unknown
+      - run: cargo build -p mnema-core --target wasm32-unknown-unknown
