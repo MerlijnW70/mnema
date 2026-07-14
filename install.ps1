@@ -44,6 +44,24 @@ try {
     $zip = Join-Path $tmp $asset
     Write-Host "Downloading $asset ..."
     Invoke-WebRequest -Uri $url -OutFile $zip
+
+    # Verify against the release's SHA256SUMS — don't blindly trust what the URL served. Refuse on
+    # mismatch, or if the release predates checksums (v0.1.4+).
+    $sumsFile = Join-Path $tmp 'SHA256SUMS'
+    try {
+        Invoke-WebRequest -Uri "https://github.com/$repo/releases/download/$tag/SHA256SUMS" -OutFile $sumsFile
+    } catch {
+        throw "could not fetch SHA256SUMS for $tag — refusing to install unverified (releases before v0.1.4 have none; set MNEMA_VERSION to v0.1.4 or later)"
+    }
+    $line = Select-String -Path $sumsFile -SimpleMatch $asset | Select-Object -First 1
+    if (-not $line) { throw "SHA256SUMS has no entry for $asset — refusing to install unverified" }
+    $expected = ($line.Line -replace '\s.*', '').ToLower()
+    $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+    if ($actual -ne $expected) {
+        throw "checksum mismatch for $asset — refusing to install (expected $expected, got $actual)"
+    }
+    Write-Host "Verified $asset (sha256 OK)."
+
     Expand-Archive -Path $zip -DestinationPath $tmp -Force
 
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
