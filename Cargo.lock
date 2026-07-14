@@ -1415,6 +1415,7 @@ dependencies = [
  "mnema-core",
  "serde_json",
  "tokenizers",
+ "ureq",
  "zeroize",
 ]
 
