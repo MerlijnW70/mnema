@@ -44,6 +44,12 @@ tokenizers = { version = "0.22", optional = true, default-features = false, feat
 hf-hub = { version = "0.4", optional = true }
 serde_json = { version = "1", optional = true }
 
+# The `http-embed` feature: semantic recall by calling a LOCAL embeddings HTTP endpoint (Ollama,
+# llama.cpp, LM Studio, …) instead of bundling a model — the lightweight alternative to
+# `local-embed`. Plain HTTP only (no TLS): a local embedding server needs none, and it keeps this a
+# few small crates rather than a whole ML stack. `ureq` is already in the tree via hf-hub.
+ureq = { version = "2", optional = true, default-features = false }
+
 [features]
 # `secure` = encryption at rest (Argon2id + XChaCha20-Poly1305) for the episodic store
 # and the whole-`Mnema` seal/open, plus the `Mnema` facade, the `mnema` CLI, and the
@@ -60,6 +66,11 @@ local-embed = [
     "dep:hf-hub",
     "dep:serde_json",
 ]
+
+# `http-embed` = semantic recall via a LOCAL embeddings HTTP endpoint (Ollama / llama.cpp / LM
+# Studio) instead of an in-process model — the lightweight alternative to `local-embed` that lets
+# the prebuilt binary do meaning-based recall with no candle/HF build. See `src/http_embed.rs`.
+http-embed = ["dep:ureq", "dep:serde_json"]
 
 # `mcp` = the mnema-server binary: a stdio JSON-RPC MCP server exposing remember / recall /
 # remember_fact / forget / stats as tools over an encrypted local store, so any MCP client

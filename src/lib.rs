@@ -35,3 +35,9 @@ pub mod facade;
 /// [`mnema_core::embed`] and is probed; the transformer itself is not.
 #[cfg(feature = "local-embed")]
 pub mod model_embed;
+
+/// A semantic `Embedder` backed by a local HTTP embeddings endpoint (Ollama / llama.cpp), behind the
+/// opt-in `http-embed` feature — meaning-based recall with no bundled model. Umbrella-only I/O glue,
+/// below the behavioral waterline.
+#[cfg(feature = "http-embed")]
+pub mod http_embed;
