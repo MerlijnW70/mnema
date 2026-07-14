@@ -1,0 +1,12 @@
+# cargo-audit configuration (https://github.com/rustsec/rustsec/tree/main/cargo-audit).
+#
+# The zero-dependency core (`mnema-core`) and the default / `secure` / `mcp` builds have ZERO
+# advisories. The two ignores below are *unmaintained*-crate warnings — NOT vulnerabilities —
+# reachable ONLY through the opt-in, heavyweight `local-embed` ML stack (candle / tokenizers /
+# hf-hub) as deep transitive dependencies outside our control. CI still fails on any real
+# vulnerability, and on any NEW advisory not listed here.
+[advisories]
+ignore = [
+    "RUSTSEC-2025-0119", # number_prefix unmaintained — via hf-hub -> indicatif (local-embed only)
+    "RUSTSEC-2024-0436", # paste unmaintained — via candle / tokenizers / gemm (local-embed only)
+]
