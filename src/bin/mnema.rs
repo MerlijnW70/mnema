@@ -103,7 +103,20 @@ fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path)?;
+    // Durability: a rename's directory entry is not on stable storage until the parent directory
+    // is fsynced (POSIX). Best-effort — the rename is already atomic, so skipping this never
+    // corrupts the store; it only weakens the "an acknowledged write survives power loss"
+    // guarantee, so a dir-fsync failure doesn't fail the write.
+    #[cfg(unix)]
+    if let Some(dir) = std::path::Path::new(path)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        && let Ok(d) = std::fs::File::open(dir)
+    {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 /// Migrate a store to a per-store keyfile: open it with the current `$MNEMA_KEY`, then re-seal it

@@ -50,6 +50,16 @@ pub fn decay_weight(age: u64, half_life: u64) -> f32 {
 /// sinks. Factored out (and asserted on exact values) so the *product* contract is pinned,
 /// not merely the resulting order — an additive combination would rank differently.
 pub fn decayed_score(base: f32, importance: f32, age: u64, half_life: u64) -> f32 {
+    // Clamp a non-finite importance (NaN/±inf) to the neutral `1.0` at the point of use, not
+    // only on the facade write path: a store decoded from disk (or built via the low-level
+    // `EpisodicLog` API) can carry a poisoned importance a `NaN` here turns the recall re-sort
+    // into a non-total order that scrambles the whole result list, so every consumer of the
+    // product must fail safe. See `is_faded` for the pruning twin.
+    let importance = if importance.is_finite() {
+        importance
+    } else {
+        1.0
+    };
     base * importance * decay_weight(age, half_life)
 }
 
@@ -62,6 +72,13 @@ pub fn decayed_score(base: f32, importance: f32, age: u64, half_life: u64) -> f3
 /// since salience is always `> 0`. The cutoff is strict (`<`): a memory sitting exactly at
 /// the threshold is kept.
 pub fn is_faded(importance: f32, age: u64, half_life: u64, threshold: f32) -> bool {
+    // Fail safe on a non-finite importance, exactly as `decayed_score` does: a `NaN` salience
+    // makes `NaN < threshold` false, which would render a poisoned memory un-prunable forever.
+    let importance = if importance.is_finite() {
+        importance
+    } else {
+        1.0
+    };
     importance * decay_weight(age, half_life) < threshold
 }
 
@@ -342,10 +359,16 @@ pub fn fuse_and_pack(
     }
 
     // Resolve fused ids back to memories, preserving fused order; ids with no memory
-    // (e.g. a since-forgotten one) simply drop out.
+    // (e.g. a since-forgotten one) simply drop out. Drop egress-*denied* memories here, up
+    // front, so a memory that will be denied for `dest` cannot act as the kept representative
+    // that suppresses a near-duplicate we could actually emit (a `Private` twin shadowing an
+    // `Open` one bound Remote would otherwise blank the result). `Redact` still emits a surface,
+    // so those stay; `pack_bundle` re-applies the full filter — this only stops a denied item
+    // from shadowing an emittable one during dedup.
     let ordered: Vec<&Memory> = fused
         .iter()
         .filter_map(|f| by_id.get(&f.id).copied())
+        .filter(|m| crate::egress_decision(m.tier, dest) != crate::EgressDecision::Deny)
         .collect();
 
     // Suppress near-duplicate memories so the budget isn't spent on repeats (diversity),
@@ -763,5 +786,53 @@ mod tests {
             a.iter().map(|f| f.id).collect::<Vec<_>>(),
             b.iter().map(|f| f.id).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn non_finite_importance_is_neutralized_in_score_and_pruning() {
+        // A NaN/±inf importance (decodable from an old or tampered store, or set via the low-level
+        // API) must not poison the product. `decayed_score` treats it as the neutral 1.0, and
+        // `is_faded` stays a real comparison — a raw NaN would make `NaN < threshold` false, so a
+        // poisoned memory would be un-prunable forever, and `NaN` scores scramble the recall sort.
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(decayed_score(2.0, bad, 0, 10), 2.0); // 2 × 1.0 × 1.0
+            assert!(decayed_score(2.0, bad, 5, 10).is_finite());
+            // Clamped to 1.0, one half-life → salience 0.5 < cutoff 1.0 → faded (NaN → false).
+            assert!(is_faded(bad, 10, 10, 1.0));
+        }
+    }
+
+    #[test]
+    fn a_denied_private_near_duplicate_does_not_shadow_an_open_twin_remotely() {
+        // Same token set → near-duplicates; the Private memory is the more recent, so it ranks
+        // first and would be the dedup keeper. Bound Remote it is dropped BEFORE dedup, so the Open
+        // twin still surfaces — rather than being suppressed as a near-dup of a then-denied memory,
+        // which would blank the bundle.
+        let mems = vec![
+            mem(1, EgressTier::Private, 2, "secret launch plan alpha"),
+            mem(2, EgressTier::Open, 1, "secret launch plan alpha"),
+        ];
+        let mut idx = VectorIndex::new(2);
+        let embedder = VowelEmbedder;
+        idx.insert(1, embedder.embed("secret launch plan alpha"))
+            .unwrap();
+        idx.insert(2, embedder.embed("secret launch plan alpha"))
+            .unwrap();
+        let remote = hybrid_recall(
+            "launch",
+            &mems,
+            &idx,
+            &embedder,
+            Destination::Remote,
+            10,
+            1_000,
+            None,
+            RetrievalWeights::default(),
+        );
+        assert!(
+            remote.iter().any(|b| b.id == 2),
+            "the Open twin must surface remotely: {remote:?}"
+        );
+        assert!(remote.iter().all(|b| b.id != 1)); // the Private memory never leaks
     }
 }
