@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
+## [0.1.5] - 2026-07-15
+
+### Added
+- **`http-embed` feature — semantic recall via a local embeddings server.** Point mnema at a model
+  you already run (Ollama by default, or any **OpenAI-compatible** `/v1/embeddings` endpoint —
+  llama.cpp, LM Studio, vLLM, TEI — auto-detected) for meaning-based recall, with no candle/Hugging
+  Face build weight. Configure with `$MNEMA_EMBED_URL` / `$MNEMA_EMBED_MODEL` / `$MNEMA_EMBED_API`.
+  Local-first: plain HTTP only, no cloud. The lightweight alternative to `local-embed`.
+
+### Security / supply chain
+- **Signed releases** — every release now publishes a `SHA256SUMS`, and the `install.sh` / `install.ps1`
+  one-liners verify the downloaded binary against it (refusing to install on a mismatch), closing the
+  trust-on-first-use gap.
+- **`cargo-deny`** now runs in CI (licenses / sources / bans) alongside `cargo-audit`, and `Cargo.lock`
+  is committed so releases resolve to pinned, audited dependency versions.
+
 ## [0.1.4] - 2026-07-15
 
 ### Added
@@ -93,6 +109,7 @@ Initial release: a local, encrypted memory layer for AI agents.
 - **Zero-friction install** — prebuilt binaries via `curl | sh` / PowerShell, plus `mnema keygen`
   for a strong `$MNEMA_KEY` passphrase.
 
+[0.1.5]: https://github.com/MerlijnW70/mnema/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/MerlijnW70/mnema/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/MerlijnW70/mnema/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/MerlijnW70/mnema/compare/v0.1.1...v0.1.2
