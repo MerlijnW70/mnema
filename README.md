@@ -95,6 +95,26 @@ The MCP server exposes the same surface as tools — `remember`, `recall`, `rece
 `private` memories; launch `mnema-server --local` **only when it feeds an on-device model** to let
 recall surface them.
 
+## Semantic recall (optional)
+
+Out of the box, recall is **lexical** (fast, zero-dependency, no model). For meaning-based recall —
+so "what beverage do I like?" finds "I drink coffee" — point mnema at a **local** embeddings server
+you already run, no cloud and no heavyweight build:
+
+```bash
+# Build with the http-embed feature (a few small crates — not a whole ML stack)
+cargo install mnema --features mcp,http-embed
+
+# Run a local embedding model, e.g. Ollama:  ollama pull nomic-embed-text
+MNEMA_EMBED_MODEL=nomic-embed-text mnema-server --path ~/mnema.store
+```
+
+It defaults to Ollama on `http://localhost:11434/api/embeddings`. Point it anywhere with
+`MNEMA_EMBED_URL` — an **OpenAI-compatible** `/v1/embeddings` endpoint (llama.cpp, LM Studio, vLLM,
+text-embeddings-inference) is auto-detected, or force it with `MNEMA_EMBED_API=ollama|openai`.
+Everything stays on your machine. *(Prefer a fully self-contained binary? `--features local-embed`
+bundles `all-MiniLM-L6-v2` via candle instead — heavier build, no server to run.)*
+
 ## Keys
 
 You don't have to manage a key: omit `MNEMA_KEY` and mnema generates a random key file
