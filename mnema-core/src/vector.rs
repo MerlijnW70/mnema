@@ -44,7 +44,9 @@ pub struct Scored {
 }
 
 /// An exact nearest-neighbour index over fixed-dimension embeddings.
-#[derive(Clone, Debug, Default)]
+// No `Default`: a default (`dims == 0`) index rejects every real embedding with `DimMismatch`,
+// so it is a public trap. Construct with [`VectorIndex::new`] against a real width instead.
+#[derive(Clone, Debug)]
 pub struct VectorIndex {
     dims: usize,
     /// `(id, vector, ‖vector‖)` — the norm is cached at insert so a query never recomputes it.
@@ -133,7 +135,8 @@ impl VectorIndex {
 /// ties included, since both rank by the same total order (score descending, then id
 /// ascending) rather than a collection-order-dependent stable sort. A mutant that drops a
 /// candidate bucket, mis-assigns a vector, or changes the tiebreak breaks that equality.
-#[derive(Clone, Debug, Default)]
+// No `Default`: like [`VectorIndex`], a `dims == 0` index is unusable; build with `IvfIndex::new`.
+#[derive(Clone, Debug)]
 pub struct IvfIndex {
     dims: usize,
     anchors: Vec<Vec<f32>>,

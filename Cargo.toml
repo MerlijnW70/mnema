@@ -29,6 +29,9 @@ mnema-core = { path = "mnema-core", version = "0.1.1" }
 chacha20poly1305 = { version = "0.10", optional = true }
 argon2 = { version = "0.5", optional = true }
 getrandom = { version = "0.2", optional = true }
+# Wipe derived keys and passphrases from memory on drop (defense-in-depth against a core dump /
+# swap of the long-lived server). Already in the tree transitively via chacha20poly1305.
+zeroize = { version = "1", optional = true, features = ["alloc"] }
 
 # The `local-embed` feature (a real in-process semantic embedder): sentence-transformers
 # all-MiniLM-L6-v2 run via candle (pure Rust — no Python, no ONNX C++ runtime). OPT-IN and
@@ -45,7 +48,7 @@ serde_json = { version = "1", optional = true }
 # `secure` = encryption at rest (Argon2id + XChaCha20-Poly1305) for the episodic store
 # and the whole-`Mnema` seal/open, plus the `Mnema` facade, the `mnema` CLI, and the
 # memory_demo example.
-secure = ["dep:chacha20poly1305", "dep:argon2", "dep:getrandom"]
+secure = ["dep:chacha20poly1305", "dep:argon2", "dep:getrandom", "dep:zeroize"]
 
 # `local-embed` = a bundled real semantic embedder (all-MiniLM-L6-v2 via candle). Weights are
 # downloaded + cached from Hugging Face on first use. See `src/model_embed.rs`.
