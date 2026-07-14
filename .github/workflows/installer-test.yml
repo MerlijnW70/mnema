@@ -20,8 +20,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Install via the documented curl | sh one-liner
-        run: curl -fsSL https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.sh | sh
+      - name: Install via the curl | sh one-liner (from the commit under test)
+        run: curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" | sh
 
       - name: Run the installed binaries end-to-end
         run: |
@@ -43,9 +43,9 @@ jobs:
     name: irm | iex (windows)
     runs-on: windows-latest
     steps:
-      - name: Install via the documented irm | iex one-liner
+      - name: Install via the irm | iex one-liner (from the commit under test)
         shell: pwsh
-        run: irm https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.ps1 | iex
+        run: irm "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.ps1" | iex
 
       - name: Run the installed binaries end-to-end
         shell: pwsh
