@@ -499,12 +499,30 @@ fn write_atomic(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Create the directory the store lives in, if it doesn't exist yet, so a `--path` pointing into a
+/// not-yet-created folder just works instead of failing later with a cryptic "cannot open lock
+/// file … path not found". Idempotent; a bare filename (no parent) is a no-op.
+fn ensure_parent_dir(path: &str) {
+    if let Some(dir) = std::path::Path::new(path)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        eprintln!(
+            "mnema-server: cannot create store directory {} ({e})",
+            dir.display()
+        );
+        std::process::exit(1);
+    }
+}
+
 /// Take an exclusive advisory lock for the store via a sibling `<path>.lock`, returning the held
 /// `File` (drop it to release; the OS also releases on process exit). Refuses to start if another
 /// mnema process already holds it, so two writers can't clobber each other. The lock file is
 /// separate from the store because the store is atomically *renamed* on every write, which would
 /// drop a lock held on the store file itself.
 fn lock_store(path: &str) -> std::fs::File {
+    ensure_parent_dir(path);
     let lockpath = format!("{path}.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -584,5 +602,22 @@ mod tests {
                 "tier {bad:?} must be rejected, not coerced to a shareable tier"
             );
         }
+    }
+
+    #[test]
+    fn ensure_parent_dir_creates_a_missing_store_directory() {
+        let mut base = std::env::temp_dir();
+        base.push("mnema_ensure_parent_dir_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let nested = base.join("nested").join("deeper");
+        let store = nested.join("s.store");
+        assert!(!nested.exists());
+        ensure_parent_dir(store.to_str().unwrap());
+        assert!(
+            nested.is_dir(),
+            "the store's parent directory must be created"
+        );
+        ensure_parent_dir(store.to_str().unwrap()); // idempotent on an existing dir
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
