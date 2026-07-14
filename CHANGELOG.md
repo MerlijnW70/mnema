@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
+## [0.1.4] - 2026-07-15
+
+### Added
+- **`forget_fact` MCP tool** — hard-delete beliefs about a subject (or one attribute), the belief
+  equivalent of `forget`. Lets an agent correct or remove a wrong/stale belief over MCP.
+- **`mnema-server --local` (or `$MNEMA_LOCAL`)** — switches recall/recent/beliefs to the local
+  egress destination so an **on-device** model can read `private` memories. It is a deployment
+  choice fixed at startup, never a per-call argument, so a caller can't open the egress wall itself.
+  The default stays remote (private memories withheld).
+- **CLI parity** — `recent`, `beliefs`, `reinforce`, `forget`, and `forget-fact` commands, over the
+  same facade the MCP server uses. (Previously there was no way to delete a memory from the CLI.)
+
 ## [0.1.3] - 2026-07-14
 
 ### Fixed
@@ -81,6 +93,7 @@ Initial release: a local, encrypted memory layer for AI agents.
 - **Zero-friction install** — prebuilt binaries via `curl | sh` / PowerShell, plus `mnema keygen`
   for a strong `$MNEMA_KEY` passphrase.
 
+[0.1.4]: https://github.com/MerlijnW70/mnema/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/MerlijnW70/mnema/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/MerlijnW70/mnema/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/MerlijnW70/mnema/compare/v0.1.0...v0.1.1
