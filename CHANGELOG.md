@@ -13,6 +13,13 @@ patch = additive or fixes).
   having to call a tool — and a `recall` **prompt** to pull relevant memories into the conversation
   on demand. Both are egress-filtered like every read.
 
+### Changed
+- **Semantic builds now weight the meaning-match higher.** When compiled with `http-embed` or
+  `local-embed`, the server tips recall toward the dense (embedding) retriever
+  (`RetrievalWeights::semantic`) so a real model's meaning-match outvotes a mere keyword or recency
+  overlap — the lexical default stays balanced. New `Mnema::recall_decayed_weighted` combines the
+  forgetting curve with custom fusion weights.
+
 ### Performance
 - `build_ann` no longer re-embeds every memory to build the approximate index; it reuses the vectors
   already in the exact index (via the new `VectorIndex::entries`). With a real model/HTTP embedder
