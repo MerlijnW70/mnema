@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
+## [0.1.9] - 2026-07-15
+
+### Performance
+- **Opening a store no longer re-embeds every memory.** The vector index is now persisted inside the
+  sealed store, so `open` restores the embeddings directly instead of running the embedder over every
+  memory again. With a real model or an `http-embed` endpoint that eliminated a cold-start forward
+  pass per memory on every open. Reuse is guarded by a one-vector probe: if this build's embedder no
+  longer reproduces the stored vectors (a changed model, or `migrate` at a new width), the store
+  falls back to re-embedding — so recall can never resume against stale vectors. The format change is
+  backward-compatible both ways: an older binary ignores the trailing vector blob, and a store sealed
+  before this release simply re-embeds on first open.
+
 ## [0.1.8] - 2026-07-15
 
 ### Docs
@@ -150,6 +162,7 @@ Initial release: a local, encrypted memory layer for AI agents.
 - **Zero-friction install** — prebuilt binaries via `curl | sh` / PowerShell, plus `mnema keygen`
   for a strong `$MNEMA_KEY` passphrase.
 
+[0.1.9]: https://github.com/MerlijnW70/mnema/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/MerlijnW70/mnema/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/MerlijnW70/mnema/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/MerlijnW70/mnema/compare/v0.1.5...v0.1.6
