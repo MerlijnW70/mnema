@@ -17,6 +17,14 @@ categories = ["data-structures", "database-implementations"]
 # entirely. Only the library, its tests, examples, and the README publish.
 exclude = ["docs", "scripts", ".gitignore"]
 
+# docs.rs builds with default features, which for this umbrella is just the re-exported zero-dep
+# core — the `Mnema` facade, encrypted store, and embedders are all feature-gated and would be
+# invisible. Build the docs with the features that expose the full API (this is the same combo the
+# CI rustdoc-link guard verifies renders clean; `local-embed`/candle is omitted to keep the build
+# light).
+[package.metadata.docs.rs]
+features = ["mcp", "http-embed"]
+
 [dependencies]
 # The zero-dependency core — the egress invariant, memory model, and pure-logic stores. This is the
 # ONLY non-optional dependency, and it is itself a zero-dependency leaf (path within the workspace; the
