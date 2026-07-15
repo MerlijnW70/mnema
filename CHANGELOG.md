@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
+## [Unreleased]
+
+### Changed
+- **Recall now uses balanced fusion for every embedder** — the 0.1.7 change that tipped semantic
+  builds toward the dense retriever (`RetrievalWeights::semantic`) is reverted in the server after
+  measuring it: on the full LoCoMo benchmark (1981 questions, all-MiniLM-L6-v2) dense-boosted fusion
+  scored R@5 0.401 / R@10 0.467 while **balanced** fusion scored **0.425 / 0.543** (+2.4 / +7.6 pts),
+  with no regression on the pure-semantic paraphrase fixture. Reciprocal-rank fusion combines ranks,
+  so over-weighting one retriever suppresses the keyword signal conversational recall (dates, names)
+  needs. The `RetrievalWeights::semantic` preset stays available for callers who want it.
+
+### Benchmarks
+- Added `benches/locomo_sweep.rs` + `scripts/locomo_sweep.sh` — a fusion-weight sweep over real
+  LoCoMo Recall@k with a pure-semantic paraphrase cross-check, using a memoizing embedder so the
+  whole multi-config sweep costs one embedding pass per conversation. This is the harness that found
+  the balanced-fusion result above.
+
 ## [0.1.9] - 2026-07-15
 
 ### Performance
