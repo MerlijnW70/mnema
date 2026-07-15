@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
-## [Unreleased]
+## [0.1.7] - 2026-07-15
 
 ### Added
 - **MCP resources & prompts.** The server now advertises a `mnema://recent` **resource** — recent
@@ -143,6 +143,7 @@ Initial release: a local, encrypted memory layer for AI agents.
 - **Zero-friction install** — prebuilt binaries via `curl | sh` / PowerShell, plus `mnema keygen`
   for a strong `$MNEMA_KEY` passphrase.
 
+[0.1.7]: https://github.com/MerlijnW70/mnema/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/MerlijnW70/mnema/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/MerlijnW70/mnema/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/MerlijnW70/mnema/compare/v0.1.3...v0.1.4
