@@ -1,4 +1,4 @@
-//! [`HttpEmbedder`] — semantic embeddings from a **local** HTTP endpoint (Ollama, llama.cpp, LM
+//! `HttpEmbedder` — semantic embeddings from a **local** HTTP endpoint (Ollama, llama.cpp, LM
 //! Studio, text-embeddings-inference, vLLM) instead of a model bundled in-process. This gives the
 //! prebuilt binary real *meaning-based* recall with **no candle / Hugging Face build weight**, and
 //! lets the user pick whatever embedding model their server hosts. Behind the opt-in `http-embed`
@@ -12,12 +12,12 @@
 //! server needs none, it keeps the dependency to a few small crates, and it steers this at on-device
 //! models rather than a cloud embedding API — matching mnema's privacy posture.
 //!
-//! Two request/response shapes are supported (see [`Api`]):
+//! Two request/response shapes are supported (see `Api`):
 //! ```text
 //! Ollama:  POST { "model", "prompt": <text> }  ->  { "embedding": [f32, ...] }
 //! OpenAI:  POST { "model", "input":  <text> }  ->  { "data": [ { "embedding": [f32, ...] } ] }
 //! ```
-//! Request-build and response-parse are pure functions ([`request_body`], [`parse_embedding`]) so
+//! Request-build and response-parse are pure functions (`request_body`, `parse_embedding`) so
 //! both shapes are unit-tested without a network.
 
 use std::time::Duration;

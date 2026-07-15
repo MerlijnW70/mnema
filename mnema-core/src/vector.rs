@@ -1,7 +1,7 @@
 //! Vector retrieval — Phase-2 slice A (`docs/proposals/mnema-memory-layer.md` §3.3).
-//! The pluggable [`Embedder`] seam promised by ADR-0020 (bring-your-own model, so the
+//! The pluggable `Embedder` seam promised by ADR-0020 (bring-your-own model, so the
 //! heavy ML dependency is the caller's choice, never ours) plus an **exact** cosine
-//! [`VectorIndex`].
+//! `VectorIndex`.
 //!
 //! Exact, not approximate, on purpose. An HNSW / ANN index is *faster* but only
 //! *approximately* correct — its win is latency, which is invisible to the mutation gate's

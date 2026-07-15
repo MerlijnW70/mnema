@@ -132,7 +132,7 @@ pub fn generate_passphrase() -> Result<String, KeyError> {
 }
 
 /// Generate a fresh random 32-byte key, persist it to `path` atomically, durably, and owner-only
-/// (see [`write_keyfile_atomic`]), and return it. A write/permission failure is surfaced as
+/// (see `write_keyfile_atomic`), and return it. A write/permission failure is surfaced as
 /// [`KeyError::WriteFailed`], never silently ignored, so a store is never sealed under a key that
 /// did not actually reach disk.
 pub fn generate_keyfile(path: &Path) -> Result<Vec<u8>, KeyError> {
