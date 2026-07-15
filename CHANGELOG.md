@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
+## [Unreleased]
+
+### Added
+- **MCP resources & prompts.** The server now advertises a `mnema://recent` **resource** — recent
+  memories a client can auto-load as session-start context, so an agent gets its memory without
+  having to call a tool — and a `recall` **prompt** to pull relevant memories into the conversation
+  on demand. Both are egress-filtered like every read.
+
+### Performance
+- `build_ann` no longer re-embeds every memory to build the approximate index; it reuses the vectors
+  already in the exact index (via the new `VectorIndex::entries`). With a real model/HTTP embedder
+  that saved a forward pass per vector on every rebuild.
+
+### Docs
+- Refreshed `ARCHITECTURE.md` (workspace-split module links, `http-embed` + `migrate`), fixed every
+  broken rustdoc intra-doc link so docs.rs renders clean, and added a CI guard (`rustdoc -D warnings`).
+
 ## [0.1.6] - 2026-07-15
 
 ### Added
