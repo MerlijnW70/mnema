@@ -37,14 +37,18 @@ use mnema::vector::Embedder;
 use mnema::{BundleItem, Destination, EgressTier};
 use serde_json::{Value, json};
 
-/// The retriever-fusion weights recall uses. With a real semantic embedder (`local-embed` /
-/// `http-embed`), tip toward the dense retriever so a meaning-match outvotes a mere keyword or
-/// recency overlap; with the lexical default the dense signal is noise, so stay balanced.
-#[cfg(any(feature = "local-embed", feature = "http-embed"))]
-fn recall_weights() -> RetrievalWeights {
-    RetrievalWeights::semantic()
-}
-#[cfg(not(any(feature = "local-embed", feature = "http-embed")))]
+/// The retriever-fusion weights recall uses: **balanced** reciprocal-rank fusion (dense + recency +
+/// keyword, equal weight), for every embedder.
+///
+/// This used to tip toward the dense retriever (`RetrievalWeights::semantic`) on semantic builds,
+/// on the intuition that a real embedder's meaning-match should outvote keyword/recency. Measuring
+/// it changed the answer: on the full LoCoMo benchmark (1981 questions, all-MiniLM-L6-v2) the
+/// dense-boosted fusion scored R@5 0.401 / R@10 0.467, while balanced fusion scored **0.425 /
+/// 0.543** — +2.4 / +7.6 points — with no regression on the pure-semantic paraphrase fixture
+/// (`benches/recall.rs`) where it was supposed to help. Reciprocal-rank fusion combines *ranks*, so
+/// over-weighting one retriever suppresses the keyword signal that conversational recall (dates,
+/// names) needs. Reproduce with `benches/locomo_sweep.rs` (`scripts/locomo_sweep.sh`). The
+/// `RetrievalWeights::semantic` preset stays available for callers who want it.
 fn recall_weights() -> RetrievalWeights {
     RetrievalWeights::default()
 }

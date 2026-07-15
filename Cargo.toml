@@ -147,6 +147,13 @@ harness = false
 name = "locomo_qa"
 harness = false
 
+# Fusion-weight sweep on LoCoMo retrieval: tune RetrievalWeights against real Recall@k. One
+# embedding pass per conversation (memoizing embedder), many configs re-ranked for free.
+#   LOCOMO_PATH=locomo10.json cargo bench --bench locomo_sweep --features secure,local-embed
+[[bench]]
+name = "locomo_sweep"
+harness = false
+
 [dev-dependencies]
 # Parse the LoCoMo dataset JSON in the locomo bench (dev-only; not a crate dependency).
 serde_json = "1"
