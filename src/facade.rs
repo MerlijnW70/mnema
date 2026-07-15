@@ -296,11 +296,13 @@ impl<E: Embedder> Mnema<E> {
     ///
     /// [`kmeans_anchors`]: crate::vector::kmeans_anchors
     pub fn build_ann(&mut self, num_anchors: usize) {
+        // Reuse the vectors already in the exact index instead of re-embedding every event: the
+        // index holds exactly the embeddings of the current memories, so this is identical output
+        // — but with a real (model / HTTP) embedder it saves N forward passes on every rebuild.
         let vectors: Vec<(MemoryId, Vec<f32>)> = self
-            .episodic
-            .events()
-            .iter()
-            .map(|e| (e.id, self.embedder.embed(&e.content)))
+            .index
+            .entries()
+            .map(|(id, v)| (id, v.to_vec()))
             .collect();
         let corpus: Vec<Vec<f32>> = vectors.iter().map(|(_, v)| v.clone()).collect();
         let anchors = crate::vector::kmeans_anchors(&corpus, num_anchors, ANN_KMEANS_ITERS);
@@ -1012,6 +1014,41 @@ mod tests {
         let blob2 = migrated.seal(b"pw").unwrap();
         assert!(Mnema::open(&blob2, b"pw", HashEmbedder::new(128)).is_ok());
         assert!(Mnema::open(&blob2, b"pw", HashEmbedder::new(64)).is_err());
+    }
+
+    #[test]
+    fn build_ann_reuses_cached_vectors_without_re_embedding() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        // An embedder that tallies its calls, so we can prove build_ann doesn't re-embed.
+        struct Counting(Rc<Cell<usize>>);
+        impl crate::vector::Embedder for Counting {
+            fn dims(&self) -> usize {
+                2
+            }
+            fn embed(&self, text: &str) -> Vec<f32> {
+                self.0.set(self.0.get() + 1);
+                let n = text.len() as f32;
+                vec![n, n + 1.0]
+            }
+        }
+
+        let calls = Rc::new(Cell::new(0));
+        let mut mem = Mnema::new(Counting(Rc::clone(&calls)));
+        mem.remember(EgressTier::Open, "alpha");
+        mem.remember(EgressTier::Open, "beta");
+        mem.remember(EgressTier::Open, "gamma");
+        assert_eq!(calls.get(), 3, "one embed per remember");
+
+        // Building the approximate index reuses the vectors already in the exact index — it must
+        // NOT embed again (the whole point of the optimization; the old code did N more).
+        mem.build_ann(2);
+        assert_eq!(
+            calls.get(),
+            3,
+            "build_ann reuses cached vectors — no re-embedding"
+        );
     }
 
     #[test]

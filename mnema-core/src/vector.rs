@@ -72,6 +72,13 @@ impl VectorIndex {
         self.entries.is_empty()
     }
 
+    /// Iterate the indexed `(id, vector)` pairs in insertion order. Lets a caller reuse the
+    /// embeddings already computed here — e.g. to build the approximate [`IvfIndex`] without
+    /// re-embedding, which with a real (model / HTTP) embedder would be a forward pass per vector.
+    pub fn entries(&self) -> impl Iterator<Item = (MemoryId, &[f32])> {
+        self.entries.iter().map(|(id, v, _)| (*id, v.as_slice()))
+    }
+
     /// Index `vector` under `id`. Rejects a vector of the wrong dimensionality — a
     /// silent mismatch would let `zip` truncate and score against a truncated vector.
     pub fn insert(&mut self, id: MemoryId, vector: Vec<f32>) -> Result<(), VectorError> {
@@ -326,6 +333,20 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entries_yields_indexed_vectors_in_insertion_order() {
+        let mut idx = VectorIndex::new(2);
+        idx.insert(7, vec![1.0, 0.0]).unwrap();
+        idx.insert(3, vec![0.5, 0.5]).unwrap();
+        let got: Vec<(MemoryId, Vec<f32>)> =
+            idx.entries().map(|(id, v)| (id, v.to_vec())).collect();
+        assert_eq!(got, vec![(7, vec![1.0, 0.0]), (3, vec![0.5, 0.5])]);
+        // A removed vector is no longer yielded.
+        idx.remove(7);
+        let ids: Vec<MemoryId> = idx.entries().map(|(id, _)| id).collect();
+        assert_eq!(ids, vec![3]);
+    }
 
     /// A tiny deterministic embedder that proves the pluggable seam is real: it maps
     /// text to `[vowel_count, consonant_count]`. Not meaningful — just exercisable.
