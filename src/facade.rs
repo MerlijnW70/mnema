@@ -486,15 +486,38 @@ impl<E: Embedder> Mnema<E> {
     /// re-embedding every event, so recall resumes immediately. A wrong key or tampering
     /// yields [`StoreError::Decrypt`].
     pub fn open(blob: &[u8], passphrase: &[u8], embedder: E) -> Result<Self, StoreError> {
+        Self::open_inner(blob, passphrase, embedder, true)
+    }
+
+    /// Re-embed an existing store under a **new** `embedder` (of any width), preserving every
+    /// memory, belief, and the clock — the way to switch embedders (e.g. lexical → semantic)
+    /// without losing data. Content is embedder-independent, so only the derived vector index is
+    /// rebuilt, at the new width. Seal the returned store to persist it under the new embedder; a
+    /// re-seal after this writes the new width, so a later [`open`](Mnema::open) with the new
+    /// embedder succeeds. A wrong key or tampering yields [`StoreError::Decrypt`].
+    pub fn migrate(blob: &[u8], passphrase: &[u8], embedder: E) -> Result<Self, StoreError> {
+        Self::open_inner(blob, passphrase, embedder, false)
+    }
+
+    /// Shared decode-and-rebuild behind [`open`](Mnema::open) (`enforce_width = true`: refuse a
+    /// mismatched embedder, ADR-0023) and [`migrate`](Mnema::migrate) (`false`: re-embed at the new
+    /// width on purpose).
+    fn open_inner(
+        blob: &[u8],
+        passphrase: &[u8],
+        embedder: E,
+        enforce_width: bool,
+    ) -> Result<Self, StoreError> {
         // Derive the key from the blob's salt ONCE and keep it, so subsequent seals of this
         // reopened store skip the Argon2id KDF.
         let seal_key = SealingKey::for_salt(passphrase, SealingKey::salt_of(blob)?)?;
         let plain = seal_key.open(blob)?;
-        // Refuse an embedder whose width differs from the one that sealed the store — opening
-        // would rebuild the index at the wrong width and silently corrupt recall (ADR-0023).
+        // On the open path, refuse an embedder whose width differs from the one that sealed the
+        // store — opening would rebuild the index at the wrong width and silently corrupt recall
+        // (ADR-0023). `migrate` skips this precisely because the width change is intentional.
         let (stored_width, off) = take_u32(&plain, 0)?;
         let embedder_width = embedder.dims() as u32;
-        if stored_width != embedder_width {
+        if enforce_width && stored_width != embedder_width {
             return Err(StoreError::EmbedderWidthMismatch {
                 stored: stored_width,
                 embedder: embedder_width,
@@ -507,7 +530,8 @@ impl<E: Embedder> Mnema<E> {
         let episodic = EpisodicLog::decode(episodic_bytes)?;
         let semantic = SemanticStore::from_facts(decode_facts(semantic_bytes)?);
 
-        // The index is derived: rebuild it from the events (same id space).
+        // The index is derived: rebuild it from the events under `embedder` (same id space; a new
+        // width when migrating).
         let mut index = VectorIndex::new(embedder.dims());
         for e in episodic.events() {
             let _ = index.insert(e.id, embedder.embed(&e.content));
@@ -518,7 +542,7 @@ impl<E: Embedder> Mnema<E> {
             index,
             ann: None, // derived; rebuild explicitly with `build_ann` after opening
             semantic,
-            // Working memory is ephemeral — it is not sealed, so `open` starts fresh.
+            // Working memory is ephemeral — it is not sealed, so open/migrate start fresh.
             working: WorkingMemory::new(WORKING_HORIZON, WORKING_CAPACITY),
             embedder,
             clock,
@@ -956,6 +980,38 @@ mod tests {
                 embedder: 128,
             })
         );
+    }
+
+    #[test]
+    fn migrate_re_embeds_under_a_new_width_without_data_loss() {
+        use crate::embed::HashEmbedder;
+        // A store sealed under a width-64 embedder, with memories + a belief.
+        let mut mem = Mnema::new(HashEmbedder::new(64));
+        mem.remember(EgressTier::Open, "the user prefers TypeScript");
+        mem.remember(EgressTier::Private, "api key sk-live-secret");
+        mem.remember_fact("user", "diet", "vegetarian");
+        let blob = mem.seal(b"pw").unwrap();
+
+        // A width-128 embedder can't OPEN it (refused), but CAN migrate it.
+        assert!(Mnema::open(&blob, b"pw", HashEmbedder::new(128)).is_err());
+        let mut migrated = Mnema::migrate(&blob, b"pw", HashEmbedder::new(128)).unwrap();
+
+        // Every memory + belief survives; the index is rebuilt at the new width. (Two episodic
+        // memories; the fact is a belief, tracked separately.)
+        assert_eq!(migrated.len(), 2);
+        assert_eq!(migrated.indexed(), 2);
+        assert_eq!(
+            migrated.belief("user", "diet").map(|f| f.value.as_str()),
+            Some("vegetarian")
+        );
+        let hits = migrated.recall("TypeScript", Destination::Local, 5, 1000);
+        assert!(hits.iter().any(|b| b.text.contains("TypeScript")));
+
+        // Re-sealed under the new embedder, it now OPENS at width 128 (migration persisted) and no
+        // longer at the old width 64.
+        let blob2 = migrated.seal(b"pw").unwrap();
+        assert!(Mnema::open(&blob2, b"pw", HashEmbedder::new(128)).is_ok());
+        assert!(Mnema::open(&blob2, b"pw", HashEmbedder::new(64)).is_err());
     }
 
     #[test]
