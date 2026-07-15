@@ -55,8 +55,8 @@ struct ServerConfig {
     migrate: bool,
 }
 
-/// Parse `--path`, `--local`, `--help`. An MCP client can pass `args: ["--path", "…", "--local"]`
-/// or set `$MNEMA_PATH` / `$MNEMA_LOCAL` — either works.
+/// Parse `--path`, `--local`, `--migrate`, `--help`. An MCP client can pass
+/// `args: ["--path", "…", "--local"]` or set `$MNEMA_PATH` / `$MNEMA_LOCAL` — either works.
 fn resolve_config() -> ServerConfig {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut path = None;
@@ -232,6 +232,16 @@ fn serve<E: Embedder>(mut store: Mnema<E>, path: &str, key: &[u8], dest: Destina
                 let r = handle_tool_call(&mut store, path, key, dest, req.get("params"));
                 write_msg(&mut stdout, &reply(id, r));
             }
+            "resources/list" => write_msg(&mut stdout, &reply(id, resources_list())),
+            "resources/read" => {
+                let r = handle_resources_read(&store, dest, req.get("params"));
+                write_msg(&mut stdout, &reply(id, r));
+            }
+            "prompts/list" => write_msg(&mut stdout, &reply(id, prompts_list())),
+            "prompts/get" => {
+                let r = handle_prompts_get(&store, dest, req.get("params"));
+                write_msg(&mut stdout, &reply(id, r));
+            }
             "ping" => write_msg(&mut stdout, &reply(id, json!({}))),
             // Notifications carry no id and expect no response.
             _ if method.starts_with("notifications/") => {}
@@ -260,8 +270,83 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {} },
+        // Tools (remember/recall/…), plus a `recent` **resource** a client can auto-load as
+        // session-start context, and a `recall` **prompt** for on-demand memory injection.
+        "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
         "serverInfo": { "name": "mnema", "version": SERVER_VERSION }
+    })
+}
+
+/// The one resource: the recent memories a client can load as ambient context at session start,
+/// without the agent having to decide to call `recall`. Egress-filtered like every read.
+const RECENT_URI: &str = "mnema://recent";
+
+fn resources_list() -> Value {
+    json!({ "resources": [ {
+        "uri": RECENT_URI,
+        "name": "Recent memories",
+        "description": "The most recent stored memories — load at session start so the agent knows what it already learned. Private memories are filtered out.",
+        "mimeType": "text/plain"
+    } ] })
+}
+
+/// Handle `resources/read`: only [`RECENT_URI`] is served, rendered as newest-first text.
+fn handle_resources_read<E: Embedder>(
+    store: &Mnema<E>,
+    dest: Destination,
+    params: Option<&Value>,
+) -> Value {
+    let uri = params
+        .and_then(|p| p.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if uri != RECENT_URI {
+        return tool_error(format!("unknown resource: {uri:?}"));
+    }
+    let items = store.recall_recent(dest, 4000);
+    let text = if items.is_empty() {
+        "(no memories yet)".to_string()
+    } else {
+        render_items(&items)
+    };
+    json!({ "contents": [ { "uri": RECENT_URI, "mimeType": "text/plain", "text": text } ] })
+}
+
+fn prompts_list() -> Value {
+    json!({ "prompts": [ {
+        "name": "recall",
+        "description": "Pull the memories relevant to a query into the conversation, so past context informs this turn.",
+        "arguments": [ { "name": "query", "description": "what to recall about", "required": true } ]
+    } ] })
+}
+
+/// Handle `prompts/get`: the `recall` prompt returns the recalled memories as a user message.
+fn handle_prompts_get<E: Embedder>(
+    store: &Mnema<E>,
+    dest: Destination,
+    params: Option<&Value>,
+) -> Value {
+    let name = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if name != "recall" {
+        return tool_error(format!("unknown prompt: {name:?}"));
+    }
+    let query = params
+        .and_then(|p| p.get("arguments"))
+        .and_then(|a| a.get("query"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let hits = store.recall(query, dest, 5, 2000);
+    let body = if hits.is_empty() {
+        format!("(no memories relevant to {query:?})")
+    } else {
+        format!("Relevant memories for {query:?}:\n{}", render_items(&hits))
+    };
+    json!({
+        "description": "Recalled memories",
+        "messages": [ { "role": "user", "content": { "type": "text", "text": body } } ]
     })
 }
 
@@ -773,6 +858,55 @@ mod tests {
         assert!(
             ltext.contains("sk-live"),
             "a --local server may surface a Private memory: {ltext}"
+        );
+    }
+
+    #[test]
+    fn resources_and_prompts_honor_the_egress_wall() {
+        use mnema::embed::HashEmbedder;
+        use mnema::facade::Mnema;
+        let mut store = Mnema::new(HashEmbedder::new(HashEmbedder::DEFAULT_DIMS));
+        store.remember(EgressTier::Open, "user ships rust");
+        store.remember(EgressTier::Private, "secret sk-live key");
+
+        // The `recent` resource is egress-filtered like recall: Remote withholds Private, Local may show it.
+        let read = json!({ "uri": RECENT_URI });
+        let remote = handle_resources_read(&store, Destination::Remote, Some(&read));
+        let rt = remote["contents"][0]["text"].as_str().unwrap();
+        assert!(
+            !rt.contains("sk-live"),
+            "resource must not leak a Private memory remotely: {rt}"
+        );
+        assert!(rt.contains("rust"));
+        let local = handle_resources_read(&store, Destination::Local, Some(&read));
+        assert!(
+            local["contents"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("sk-live")
+        );
+
+        // The `recall` prompt is filtered too.
+        let get = json!({ "name": "recall", "arguments": { "query": "secret key rust" } });
+        let p = handle_prompts_get(&store, Destination::Remote, Some(&get));
+        let pt = p["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(
+            !pt.contains("sk-live"),
+            "prompt must not leak a Private memory remotely: {pt}"
+        );
+
+        // Unknown uri / prompt name are errors, not silent empties.
+        assert_eq!(
+            handle_resources_read(
+                &store,
+                Destination::Remote,
+                Some(&json!({"uri": "mnema://nope"}))
+            )["isError"],
+            json!(true)
+        );
+        assert_eq!(
+            handle_prompts_get(&store, Destination::Remote, Some(&json!({"name": "nope"})))["isError"],
+            json!(true)
         );
     }
 
