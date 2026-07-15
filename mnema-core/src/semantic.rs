@@ -20,7 +20,7 @@
 //!
 //! Facts carry an [`EgressTier`] just like episodic memories, so the privacy wall covers
 //! beliefs too: a `Private` belief is stored but withheld from a remote destination (see
-//! [`SemanticStore::current_for`]). Reasserting a belief combines tiers *fail-closed* — the
+//! `SemanticStore::current_for`). Reasserting a belief combines tiers *fail-closed* — the
 //! more restrictive one wins — so privacy never silently relaxes.
 
 use crate::{Destination, EgressDecision, EgressTier, egress_decision};
@@ -51,7 +51,7 @@ pub struct Fact {
     pub confidence: u32,
     pub status: FactStatus,
     /// The belief's egress class — a `Private` fact is stored but never returned to a
-    /// `Remote` destination (see [`SemanticStore::current_for`]).
+    /// `Remote` destination (see `SemanticStore::current_for`).
     pub tier: EgressTier,
 }
 

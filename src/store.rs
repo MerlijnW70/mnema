@@ -1,14 +1,14 @@
 //! Encrypted episodic store — Phase-1 slice 2 (`docs/proposals/mnema-memory-layer.md`
 //! §3.1, §6b). An append-only log of episodic memories that is **encrypted at rest**:
-//! the in-memory [`EpisodicLog`] holds events in time order; [`EpisodicLog::seal`]
+//! the in-memory `EpisodicLog` holds events in time order; `EpisodicLog::seal`
 //! turns it into an opaque byte blob (Argon2id-derived key + XChaCha20-Poly1305 AEAD)
-//! and [`EpisodicLog::open`] recovers it. A stolen disk image yields ciphertext only.
+//! and `EpisodicLog::open` recovers it. A stolen disk image yields ciphertext only.
 //!
 //! Gated behind the `secure` feature (ADR-0020): the crypto dependencies exist only
 //! when this compiles, so the evolution substrate and benches stay zero-dependency.
 //!
-//! The proof surface for mutation testing is the **manual codec** ([`EpisodicLog::encode`] /
-//! [`decode`]): pure, deterministic offset arithmetic where every `+`, `<`, and `>`
+//! The proof surface for mutation testing is the **manual codec** (`EpisodicLog::encode` /
+//! `decode`): pure, deterministic offset arithmetic where every `+`, `<`, and `>`
 //! is a mutation target. A mutant that miscounts an offset or a length must break a
 //! round-trip test below — that is what makes "the bytes survive encryption intact"
 //! *proven*, not asserted. The AEAD itself is trusted (RustCrypto), exercised by the

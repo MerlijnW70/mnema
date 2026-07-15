@@ -32,8 +32,8 @@ let mem  = Mnema::open(&blob, b"passphrase", HashEmbedder::new(64))?;   // fully
 | Type | Module | What it does |
 |---|---|---|
 | **Episodic** | [`store`](src/store.rs) | timestamped events; encrypted at rest (Argon2id + XChaCha20-Poly1305), tamper-evident, hard-deletable |
-| **Semantic** | [`semantic`](src/semantic.rs) | facts with **contradiction resolution** — a newer belief supersedes, never accumulates |
-| **Working** | [`working`](src/working.rs) | ephemeral scratchpad — TTL horizon + capacity cap; not persisted |
+| **Semantic** | [`semantic`](mnema-core/src/semantic.rs) | facts with **contradiction resolution** — a newer belief supersedes, never accumulates |
+| **Working** | [`working`](mnema-core/src/working.rs) | ephemeral scratchpad — TTL horizon + capacity cap; not persisted |
 | **Procedural** | *(modeled as semantic facts)* | learned preferences, e.g. "answer in metric" |
 
 ## The guarantees
@@ -93,9 +93,12 @@ opt-in (`build_ann` + `recall_fast`) — at full probe it returns exactly what t
 ### Embedders
 
 By default recall uses a zero-dependency lexical embedder (`HashEmbedder`) — no model, no download.
-Build with the `local-embed` feature for real **semantic** recall (`all-MiniLM-L6-v2` via candle, pure
-Rust; the model is fetched and cached on first use). The embedder is fixed per store — its vector width
-is recorded, and opening a store with a mismatched embedder is refused.
+For real **semantic** recall, build with either: `http-embed` — call a *local* embeddings endpoint you
+already run (Ollama, or any OpenAI-compatible `/v1/embeddings`; the light path, no ML build); or
+`local-embed` — an in-process `all-MiniLM-L6-v2` via candle (self-contained, heavier build, fetched and
+cached on first use). The embedder is fixed per store — its vector width is recorded, and opening a
+store with a mismatched embedder is refused; `Mnema::migrate` (and `mnema-server --migrate`) re-embeds
+an existing store under a new embedder without data loss.
 
 ## How the guarantees are proven
 
@@ -126,7 +129,8 @@ contradiction-resolving writes, the egress filter, and the encrypted store all h
 | *(none)* | the zero-dependency core: retrieval, semantic, working, vector, egress |
 | `secure` | encryption at rest (Argon2id + XChaCha20-Poly1305), the `Mnema` facade, the `mnema` CLI |
 | `mcp` | the `mnema-server` server (implies `secure`) |
-| `local-embed` | the bundled semantic embedder (all-MiniLM-L6-v2 via candle) |
+| `http-embed` | semantic recall via a local HTTP embeddings endpoint (Ollama / OpenAI-compatible) |
+| `local-embed` | the bundled in-process semantic embedder (all-MiniLM-L6-v2 via candle) |
 
 ## License
 

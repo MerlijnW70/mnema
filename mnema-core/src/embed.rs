@@ -1,11 +1,11 @@
-//! A built-in, dependency-free default [`Embedder`]: a hashed bag-of-words. Each token
+//! A built-in, dependency-free default `Embedder`: a hashed bag-of-words. Each token
 //! bumps one dimension (FNV-1a → bucket), so texts that share words land near each
 //! other. It is *stable* — like the in-repo `FastHasher` (ADR-0012, "own your hasher"),
 //! its exact mixing is pinned by a golden-witness test, so the vectors it produces can
 //! never silently drift and equivalent mutants stay killable.
 //!
 //! This is not a semantic model — it is a zero-dependency default so the layer is
-//! usable out of the box; bring a real local model behind the [`Embedder`] seam
+//! usable out of the box; bring a real local model behind the `Embedder` seam
 //! (ADR-0020) when you need true semantics.
 
 use crate::vector::Embedder;
@@ -71,7 +71,7 @@ impl Embedder for HashEmbedder {
 /// only the real tokens (`mask == 1`), skipping padding (`mask == 0`). This is the standard
 /// sentence-embedding reduction for models like all-MiniLM-L6-v2 — the model emits one vector
 /// per token; a sentence embedding is the mean of the non-padding ones. Exposed (with
-/// [`l2_normalize`]) so a transformer-backed [`Embedder`](crate::vector::Embedder) can reuse the
+/// [`l2_normalize`]) so a transformer-backed `Embedder` can reuse the
 /// pooling math this crate has tested rather than re-deriving it. A zero-length input yields an
 /// empty vector; an all-padding mask yields the zero vector (no division by zero).
 pub fn mean_pool(token_embeddings: &[Vec<f32>], mask: &[u32]) -> Vec<f32> {

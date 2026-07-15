@@ -313,7 +313,7 @@ impl<E: Embedder> Mnema<E> {
 
     /// Like [`recall`](Mnema::recall), but sources the dense retriever from the
     /// approximate index (scanning `probe` buckets) when one has been built with
-    /// [`build_ann`] — trading recall for speed. Without a built index it falls back to
+    /// [`build_ann`](Mnema::build_ann) — trading recall for speed. Without a built index it falls back to
     /// the exact path, so the result is always egress-safe and never worse than exact.
     pub fn recall_fast(
         &self,
@@ -551,7 +551,7 @@ impl<E: Embedder> Mnema<E> {
     }
 
     /// Write to the ephemeral scratchpad (working memory): a short-lived note stamped
-    /// at the current tick. Notes expire after [`WORKING_HORIZON`] ticks and are not
+    /// at the current tick. Notes expire after `WORKING_HORIZON` ticks and are not
     /// persisted by [`seal`](Mnema::seal).
     pub fn scratch(&mut self, content: &str) {
         let at = self.tick();
