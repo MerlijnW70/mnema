@@ -286,6 +286,36 @@ impl<E: Embedder> Mnema<E> {
         )
     }
 
+    /// Like [`recall_decayed`](Mnema::recall_decayed), but with explicit fusion `weights` — the
+    /// forgetting curve *and* custom retriever weighting together. Pair
+    /// [`RetrievalWeights::semantic`] with a real embedding model so its meaning-match outvotes a
+    /// memory that merely shares a keyword or is newer; with the default lexical embedder the dense
+    /// signal is weak, so leave `weights` at [`RetrievalWeights::default`].
+    pub fn recall_decayed_weighted(
+        &self,
+        query: &str,
+        dest: Destination,
+        per_retriever: usize,
+        char_budget: usize,
+        half_life: u64,
+        weights: RetrievalWeights,
+    ) -> Vec<BundleItem> {
+        hybrid_recall(
+            query,
+            self.episodic.events(),
+            &self.index,
+            &self.embedder,
+            dest,
+            per_retriever,
+            char_budget,
+            Some(Decay {
+                now: self.clock,
+                half_life,
+            }),
+            weights,
+        )
+    }
+
     /// Build the approximate (IVF) index over the current corpus, enabling
     /// [`recall_fast`](Mnema::recall_fast). `num_anchors` buckets are seeded by
     /// **deterministic k-means** over the corpus embeddings ([`kmeans_anchors`]), so the
@@ -1048,6 +1078,55 @@ mod tests {
             calls.get(),
             3,
             "build_ann reuses cached vectors — no re-embedding"
+        );
+    }
+
+    #[test]
+    fn semantic_weighting_lets_the_dense_match_beat_a_lexical_recency_decoy() {
+        // An embedder where the query means the same as "alpha" but shares no token with it.
+        struct DenseEmbedder;
+        impl crate::vector::Embedder for DenseEmbedder {
+            fn dims(&self) -> usize {
+                2
+            }
+            fn embed(&self, text: &str) -> Vec<f32> {
+                if text.contains("alpha") || text == "query" {
+                    vec![1.0, 0.0]
+                } else {
+                    vec![0.0, 1.0]
+                }
+            }
+        }
+        let mut mem = Mnema::new(DenseEmbedder);
+        let a = mem.remember(EgressTier::Open, "alpha"); // the meaning-match, older
+        let _b = mem.remember(EgressTier::Open, "query beta"); // shares the query keyword, newer
+
+        // Balanced weights: the lexical + more-recent decoy (b) outvotes the meaning-match.
+        let default = mem.recall_decayed_weighted(
+            "query",
+            Destination::Local,
+            1,
+            1000,
+            0,
+            RetrievalWeights::default(),
+        );
+        assert_ne!(
+            default[0].id, a,
+            "balanced fusion favors the lexical/recent decoy"
+        );
+
+        // Weight the dense retriever up (as a real embedder build does) and the meaning-match wins.
+        let semantic = mem.recall_decayed_weighted(
+            "query",
+            Destination::Local,
+            1,
+            1000,
+            0,
+            RetrievalWeights::semantic(),
+        );
+        assert_eq!(
+            semantic[0].id, a,
+            "semantic weighting surfaces the embedding match first"
         );
     }
 
