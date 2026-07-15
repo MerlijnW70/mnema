@@ -140,6 +140,13 @@ harness = false
 name = "locomo"
 harness = false
 
+# End-to-end QA accuracy on LoCoMo (the LLM-judged headline metric), fully local via Ollama.
+# Needs a running `ollama serve` + `ollama pull llama3.2:3b`, the dataset, and LOCOMO_PATH:
+#   LOCOMO_PATH=locomo10.json cargo bench --bench locomo_qa --features secure,local-embed,http-embed
+[[bench]]
+name = "locomo_qa"
+harness = false
+
 [dev-dependencies]
 # Parse the LoCoMo dataset JSON in the locomo bench (dev-only; not a crate dependency).
 serde_json = "1"
