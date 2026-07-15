@@ -150,14 +150,21 @@ fn main() {
     // aggregates — each is isolated, so the candle native-memory buildup on long runs can't reach
     // across conversations, and a flaky crash retries just that one.
     if let Ok(i) = std::env::var("LOCOMO_ONLY").map(|v| v.parse::<usize>().unwrap()) {
+        // Weights are overridable via env so a preset sweep needs no recompile; default = semantic().
+        let base = RetrievalWeights::semantic();
+        let wf = |name: &str, dflt: f32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(dflt)
+        };
+        let weights = RetrievalWeights {
+            dense: wf("MNEMA_W_DENSE", base.dense),
+            recency: wf("MNEMA_W_RECENCY", base.recency),
+            keyword: wf("MNEMA_W_KEYWORD", base.keyword),
+        };
         let model = std::sync::Arc::new(MiniLmEmbedder::load().expect("load all-MiniLM-L6-v2"));
-        let (r5s, r10s, n) = eval_range(
-            &data,
-            || ArcEmbedder(model.clone()),
-            RetrievalWeights::semantic(),
-            i,
-            i + 1,
-        );
+        let (r5s, r10s, n) = eval_range(&data, || ArcEmbedder(model.clone()), weights, i, i + 1);
         println!("SEM {r5s} {r10s} {n}");
         return;
     }
