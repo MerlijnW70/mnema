@@ -5,7 +5,7 @@ members = ["mnema-core"]
 
 [package]
 name = "mnema"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 repository = "https://github.com/MerlijnW70/mnema"
 description = "A local, encrypted memory layer for AI agents — never forgets, never leaks to the cloud."
@@ -29,7 +29,7 @@ features = ["mcp", "http-embed"]
 # The zero-dependency core — the egress invariant, memory model, and pure-logic stores. This is the
 # ONLY non-optional dependency, and it is itself a zero-dependency leaf (path within the workspace; the
 # version pin keeps a crates.io publish honest).
-mnema-core = { path = "mnema-core", version = "0.1.8" }
+mnema-core = { path = "mnema-core", version = "0.1.9" }
 
 # The `secure` feature (encryption at rest for the episodic store + the Mnema facade):
 # a small, vetted, safe-Rust crypto set — OPTIONAL, so the core (retrieval, semantic,
