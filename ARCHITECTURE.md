@@ -100,6 +100,30 @@ cached on first use). The embedder is fixed per store — its vector width is re
 store with a mismatched embedder is refused; `Mnema::migrate` (and `mnema-server --migrate`) re-embeds
 an existing store under a new embedder without data loss.
 
+### Measured retrieval quality
+
+Recall is measured on **LoCoMo** (Maharana et al.), the public long-conversation memory benchmark, with
+reproducible in-repo harnesses — no LLM judge on the retrieval number, so it can't be gamed. Ingest
+every conversation turn as a memory, then for each of the 1,981 answerable questions measure whether the
+gold evidence turns land in top-k (`benches/locomo.rs`, all 10 conversations):
+
+| retriever | Recall@5 | Recall@10 |
+|---|---|---|
+| lexical (`HashEmbedder`, default) | 0.245 | 0.380 |
+| semantic (`all-MiniLM-L6-v2`, dense-weighted) | **0.401** | **0.467** |
+
+The semantic path lifts Recall@5 by **+15.6 points** — that gap is what a real embedder + dense-weighted
+fusion buys on the memory layer's actual job. (An in-repo paraphrase fixture, `benches/recall.rs`, tells
+the same story on hand-written queries: semantic R@5 0.769 vs lexical 0.385.)
+
+An **end-to-end QA-accuracy** harness (`benches/locomo_qa.rs`) closes the loop — retrieve context, let a
+local LLM answer, judge the answer — the LLM-graded metric Mem0/Zep report. It runs fully locally via
+Ollama (no API key). The reported number is **answerer-bound**, not a retrieval ceiling: on one fixed
+25-question sample, swapping *only* the model lifts accuracy from 0.16 (`llama3.2:3b`) to 0.28
+(`qwen2.5:7b`) — +75% for the same retrieval. What remains is multi-hop retrieval recall (bounded by
+R@10 0.47) and hard relative-date arithmetic, not the answerer — point `$QA_MODEL` at a stronger
+endpoint to raise it further.
+
 ## How the guarantees are proven
 
 Every invariant is pinned by a **zero-dependency behavioral mutation-coverage gate**. Its rule: *a
