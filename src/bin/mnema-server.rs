@@ -49,6 +49,10 @@ struct ServerConfig {
     /// ONLY when the server feeds an on-device model. It is a **deployment** decision set at launch,
     /// never a per-call argument, so a caller/model can never flip the egress wall open itself.
     dest: Destination,
+    /// `--migrate`: re-embed the existing store under this build's embedder and exit, instead of
+    /// serving. Used to move a store to a different embedder (e.g. a lexical store to a semantic
+    /// build) without losing data — otherwise the mismatched build refuses to open it.
+    migrate: bool,
 }
 
 /// Parse `--path`, `--local`, `--help`. An MCP client can pass `args: ["--path", "…", "--local"]`
@@ -59,6 +63,7 @@ fn resolve_config() -> ServerConfig {
     let mut local = std::env::var("MNEMA_LOCAL")
         .map(|v| !v.is_empty())
         .unwrap_or(false);
+    let mut migrate = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -70,13 +75,16 @@ fn resolve_config() -> ServerConfig {
                 }));
             }
             "--local" => local = true,
+            "--migrate" => migrate = true,
             "-h" | "--help" => {
                 println!(
                     "mnema-server — MCP memory server (stdio JSON-RPC)\n\n\
-                     USAGE: mnema-server [--path <store>] [--local]\n\n\
+                     USAGE: mnema-server [--path <store>] [--local] [--migrate]\n\n\
                      Store path: --path, else $MNEMA_PATH, else ./mnema.store.\n\
                      --local (or $MNEMA_LOCAL=1): recall may return Private memories — set this ONLY\n\
                      when the server feeds an on-device model, never a cloud one.\n\
+                     --migrate: re-embed the store under this build's embedder and exit (use once to\n\
+                     move a store to a different embedder, e.g. lexical -> a semantic build).\n\
                      $MNEMA_KEY sets a passphrase; omit it for an auto-generated <store>.key."
                 );
                 std::process::exit(0);
@@ -96,40 +104,42 @@ fn resolve_config() -> ServerConfig {
     } else {
         Destination::Remote
     };
-    ServerConfig { path, dest }
+    ServerConfig {
+        path,
+        dest,
+        migrate,
+    }
 }
 
 fn main() {
     let cfg = resolve_config();
-    let path = cfg.path;
     // Hold an exclusive advisory lock on the store for the whole session. A resident server keeps
     // the store in RAM and re-seals it on every write, so a second concurrent writer's records
     // would be silently clobbered by the next re-seal. `_lock` lives to the end of main; the OS
     // releases it when the process exits (even on crash). Taken first, so a keyfile generated below
     // (for a fresh store) is written under the lock.
-    let _lock = lock_store(&path);
+    let _lock = lock_store(&cfg.path);
 
     // Resolve the per-store key the same way the CLI does: $MNEMA_KEY, else a random sidecar
     // <store>.key (generated for a fresh store). This shares a store family with the CLI and never
     // seals under an empty passphrase — an unset key no longer means weak, silent encryption.
-    let key = mnema::keyfile::resolve_key(std::path::Path::new(&path)).unwrap_or_else(|e| {
+    let key = mnema::keyfile::resolve_key(std::path::Path::new(&cfg.path)).unwrap_or_else(|e| {
         eprintln!("mnema-server: {e}");
         std::process::exit(1);
     });
 
-    // The embedder is chosen at compile time. `serve` is generic over it, so the whole server
-    // is identical either way — only the vector arm of recall differs (lexical vs semantic).
-    // Embedder precedence: an in-process candle model (`local-embed`), else a local HTTP embeddings
-    // endpoint (`http-embed`), else the zero-dependency lexical `HashEmbedder`.
+    // The embedder is chosen at compile time; `run` is generic over it. Precedence: an in-process
+    // candle model (`local-embed`), else a local HTTP embeddings endpoint (`http-embed`), else the
+    // zero-dependency lexical `HashEmbedder`.
     #[cfg(feature = "local-embed")]
-    let store = open_store(&path, &key, || {
+    run(&cfg, &key, || {
         mnema::model_embed::MiniLmEmbedder::load().unwrap_or_else(|e| {
             eprintln!("mnema-server: could not load the semantic model ({e})");
             std::process::exit(1);
         })
     });
     #[cfg(all(feature = "http-embed", not(feature = "local-embed")))]
-    let store = open_store(&path, &key, || {
+    run(&cfg, &key, || {
         mnema::http_embed::HttpEmbedder::from_env().unwrap_or_else(|e| {
             eprintln!(
                 "mnema-server: could not reach the embeddings endpoint ({e}). Is your local \
@@ -139,11 +149,46 @@ fn main() {
         })
     });
     #[cfg(not(any(feature = "local-embed", feature = "http-embed")))]
-    let store = open_store(&path, &key, || {
-        HashEmbedder::new(HashEmbedder::DEFAULT_DIMS)
-    });
+    run(&cfg, &key, || HashEmbedder::new(HashEmbedder::DEFAULT_DIMS));
+}
 
-    serve(store, &path, &key, cfg.dest);
+/// With the chosen embedder: either migrate the store to it and exit (`--migrate`), or open the
+/// store and serve. Generic over the embedder so all three feature builds share one path.
+fn run<E: Embedder>(cfg: &ServerConfig, key: &[u8], make: impl Fn() -> E) {
+    if cfg.migrate {
+        migrate_and_exit(&cfg.path, key, make());
+    }
+    let store = open_store(&cfg.path, key, make);
+    serve(store, &cfg.path, key, cfg.dest);
+}
+
+/// Re-embed the existing store under `embedder` (possibly a different width), re-seal, write, and
+/// exit — the escape hatch when the store was written by a different embedder (e.g. a lexical store
+/// opened by a semantic build). Requires an existing store; run once, then start the server normally.
+fn migrate_and_exit<E: Embedder>(path: &str, key: &[u8], embedder: E) -> ! {
+    let width = embedder.dims();
+    let blob = std::fs::read(path).unwrap_or_else(|e| {
+        eprintln!("mnema-server: nothing to migrate — cannot read {path} ({e})");
+        std::process::exit(1);
+    });
+    let mut store = Mnema::migrate(&blob, key, embedder).unwrap_or_else(|e| {
+        eprintln!("mnema-server: migrate failed ({e:?}) — wrong $MNEMA_KEY, or a corrupt store");
+        std::process::exit(1);
+    });
+    let count = store.len();
+    let out = store.seal(key).unwrap_or_else(|e| {
+        eprintln!("mnema-server: migrate re-seal failed ({e:?})");
+        std::process::exit(1);
+    });
+    write_atomic(path, &out).unwrap_or_else(|e| {
+        eprintln!("mnema-server: migrate write failed: {e}");
+        std::process::exit(1);
+    });
+    eprintln!(
+        "mnema-server: migrated {count} memories to a width-{width} embedder — {path} now opens \
+         with this build."
+    );
+    std::process::exit(0);
 }
 
 /// The JSON-RPC read/dispatch/persist loop, generic over the embedder in play. `dest` is the
@@ -632,6 +677,16 @@ fn open_store<E: Embedder>(path: &str, key: &[u8], make: impl Fn() -> E) -> Mnem
     match std::fs::read(path) {
         Ok(blob) => match Mnema::open(&blob, key, make()) {
             Ok(m) => m,
+            // A width mismatch means the store was written by a *different embedder* (not a bad
+            // key) — point the user at the migration escape hatch instead of "fix your key".
+            Err(mnema::store::StoreError::EmbedderWidthMismatch { stored, embedder }) => {
+                eprintln!(
+                    "mnema-server: {path} was written by a different embedder (vector width {stored}, \
+                     this build uses {embedder}). Re-embed it once with \
+                     `mnema-server --migrate --path {path}`, then start normally."
+                );
+                std::process::exit(1);
+            }
             Err(e) => {
                 eprintln!(
                     "mnema-server: {path} exists but could not be opened ({e:?}) — wrong MNEMA_KEY \

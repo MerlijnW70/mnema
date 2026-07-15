@@ -115,6 +115,13 @@ text-embeddings-inference) is auto-detected, or force it with `MNEMA_EMBED_API=o
 Everything stays on your machine. *(Prefer a fully self-contained binary? `--features local-embed`
 bundles `all-MiniLM-L6-v2` via candle instead — heavier build, no server to run.)*
 
+**Already have a store?** Switching embedders changes the vector width, so re-embed it once — no data
+lost:
+
+```bash
+mnema-server --path ~/mnema.store --migrate   # re-embeds under the new embedder, then exits
+```
+
 ## Keys
 
 You don't have to manage a key: omit `MNEMA_KEY` and mnema generates a random key file
