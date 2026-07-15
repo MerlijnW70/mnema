@@ -27,6 +27,11 @@
 # Benchmark-scan output — kept local, never published or committed.
 .sota/
 
+# The LoCoMo dataset for `benches/locomo.rs` — a third party's (~2.8 MB), downloaded on demand
+# (see the bench header), never vendored into this repo.
+locomo10.json
+data/locomo10.json
+
 # The local mutation-coverage gate's config, baseline, and binaries — a per-machine dev
 # install, not source. Kept on disk to run the gate locally; never published or committed.
 .internal-tool/
