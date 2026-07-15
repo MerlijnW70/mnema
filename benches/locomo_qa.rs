@@ -29,15 +29,21 @@
 //! / `$QA_CONVS` for a fuller run. Config: `$QA_MODEL`, `$QA_URL`, `$QA_SAMPLE`, `$QA_TOPK`, `$QA_CONVS`.
 //!
 //! ## Observed baseline (read the caveat)
-//! 2026-07-15, 25-question sample (5 per conversation × 5), top-10, **llama3.2:3b as both answerer
-//! and judge**: overall **0.16** (cat1 0.30, cat2 0.00, cat3 0.00, cat4 0.50). This is
-//! **answerer-bound, not a retrieval ceiling** — the retrieval is working (the retrieval-recall
-//! number is in `benches/locomo.rs`: semantic R@5 0.40). The misses are dominated by the small
-//! model: on temporal questions it returns *near-correct* dates ("20 January" for gold "19 January",
-//! "22 December" for "21 December") — proof the evidence was retrieved, but its relative-date
-//! arithmetic ("yesterday" = the session date − 1) is wrong — and a strict 3B judge rejects
-//! partially-correct answers ("Taekwondo" vs "Kickboxing, Taekwondo"). Point `$QA_MODEL` at a
-//! stronger endpoint (a bigger local model, or your own) to raise it; this is a floor, not a claim.
+//! 2026-07-15, one fixed 25-question sample (5 per conversation × 5), top-10, answerer==judge:
+//!
+//! | model      | overall | cat1 | cat2 | cat3 | cat4 |
+//! |------------|---------|------|------|------|------|
+//! | llama3.2:3b| 0.16    | 0.30 | 0.00 | 0.00 | 0.50 |
+//! | qwen2.5:7b | 0.28    | 0.40 | 0.11 | 0.25 | 0.50 |
+//!
+//! The number is **answerer-bound, not a retrieval ceiling**: swapping *only* the model (same
+//! retrieval, same questions) lifts accuracy +75% relative — so a stronger `$QA_MODEL` raises it,
+//! and the retrieval itself is fine (retrieval-recall lives in `benches/locomo.rs`: semantic R@5
+//! 0.40). What's left after the answerer improves is (1) **multi-hop retrieval recall** — "what
+//! items does John collect?" returns "jerseys" when gold is "sneakers, DVDs, jerseys" and the other
+//! gold turns weren't in top-10 (bounded by R@10 0.47) — and (2) hard **relative-date arithmetic**
+//! ("yesterday" = the session date − 1), which even 7B gets off-by-one ("20 January" for gold "19
+//! January"). This is a floor to raise, not a claim to cite.
 
 #[cfg(all(feature = "secure", feature = "local-embed", feature = "http-embed"))]
 fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {

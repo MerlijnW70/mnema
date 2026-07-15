@@ -118,9 +118,11 @@ the same story on hand-written queries: semantic R@5 0.769 vs lexical 0.385.)
 
 An **end-to-end QA-accuracy** harness (`benches/locomo_qa.rs`) closes the loop — retrieve context, let a
 local LLM answer, judge the answer — the LLM-graded metric Mem0/Zep report. It runs fully locally via
-Ollama (no API key). The reported number is **answerer-bound**: with a small local model (`llama3.2:3b`)
-a 25-question sample scores ~0.16, bottlenecked by the model's relative-date arithmetic and a strict
-small-model judge, *not* by retrieval — point `$QA_MODEL` at a stronger endpoint to raise it.
+Ollama (no API key). The reported number is **answerer-bound**, not a retrieval ceiling: on one fixed
+25-question sample, swapping *only* the model lifts accuracy from 0.16 (`llama3.2:3b`) to 0.28
+(`qwen2.5:7b`) — +75% for the same retrieval. What remains is multi-hop retrieval recall (bounded by
+R@10 0.47) and hard relative-date arithmetic, not the answerer — point `$QA_MODEL` at a stronger
+endpoint to raise it further.
 
 ## How the guarantees are proven
 
