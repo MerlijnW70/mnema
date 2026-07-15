@@ -32,9 +32,22 @@ use std::io::{BufRead, Write};
 #[cfg(not(any(feature = "local-embed", feature = "http-embed")))]
 use mnema::embed::HashEmbedder;
 use mnema::facade::Mnema;
+use mnema::retrieval::RetrievalWeights;
 use mnema::vector::Embedder;
 use mnema::{BundleItem, Destination, EgressTier};
 use serde_json::{Value, json};
+
+/// The retriever-fusion weights recall uses. With a real semantic embedder (`local-embed` /
+/// `http-embed`), tip toward the dense retriever so a meaning-match outvotes a mere keyword or
+/// recency overlap; with the lexical default the dense signal is noise, so stay balanced.
+#[cfg(any(feature = "local-embed", feature = "http-embed"))]
+fn recall_weights() -> RetrievalWeights {
+    RetrievalWeights::semantic()
+}
+#[cfg(not(any(feature = "local-embed", feature = "http-embed")))]
+fn recall_weights() -> RetrievalWeights {
+    RetrievalWeights::default()
+}
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -338,7 +351,7 @@ fn handle_prompts_get<E: Embedder>(
         .and_then(|a| a.get("query"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let hits = store.recall(query, dest, 5, 2000);
+    let hits = store.recall_decayed_weighted(query, dest, 5, 2000, 0, recall_weights());
     let body = if hits.is_empty() {
         format!("(no memories relevant to {query:?})")
     } else {
@@ -532,7 +545,8 @@ fn handle_tool_call<E: Embedder>(
             // without time decay; a positive value also biases toward recent memories.
             // Destination::Remote drops Private memories at the egress wall either way.
             let half_life = args.get("half_life").and_then(Value::as_u64).unwrap_or(0);
-            let hits = store.recall_decayed(&query, dest, k, budget, half_life);
+            let hits =
+                store.recall_decayed_weighted(&query, dest, k, budget, half_life, recall_weights());
             if hits.is_empty() {
                 "(no relevant memories)".to_string()
             } else {
