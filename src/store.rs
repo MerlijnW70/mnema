@@ -458,7 +458,7 @@ impl SealingKey {
         // so a malformed/wrong-version blob must be rejected here rather than after a wasted KDF.
         split_sealed(blob)?;
         let (salt, _) = take_slice(blob, VERSION_LEN, SALT_LEN)?;
-        Ok(salt.try_into().unwrap())
+        Ok(salt.try_into().expect("take_slice: SALT_LEN bytes"))
     }
 
     /// Seal `plaintext` under this key with a **fresh** nonce — no KDF.
