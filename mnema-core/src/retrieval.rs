@@ -307,7 +307,7 @@ pub fn hybrid_recall(
 }
 
 /// The index-agnostic core of the read path: given a pre-computed `vector_rank` (from
-/// *any* index — the exact [`VectorIndex`] or the approximate [`IvfIndex`]), fuse it
+/// *any* index — the exact `VectorIndex` or the approximate `IvfIndex`), fuse it
 /// with the recency and keyword retrievers, apply the optional forgetting curve, and
 /// pack the result through the egress filter. Every context assembler funnels through
 /// the one `pack_bundle` choke point, so ADR-0021 holds regardless of the index.

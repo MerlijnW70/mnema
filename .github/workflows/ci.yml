@@ -68,5 +68,13 @@ jobs:
       # request/response logic is unit-tested.
       - run: cargo build --features mcp,http-embed --bin mnema-server
       - run: cargo test --features http-embed --lib http_embed
+      # Docs must build with no broken intra-doc links — docs.rs is the canonical API reference, so
+      # a dead `[link]` there is user-facing rot.
+      - name: rustdoc has no broken links
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: |
+          cargo doc --no-deps -p mnema-core
+          cargo doc --no-deps --features mcp,http-embed
       # The zero-dependency core must stay WebAssembly-compatible (browser / edge).
       - run: cargo build -p mnema-core --target wasm32-unknown-unknown
