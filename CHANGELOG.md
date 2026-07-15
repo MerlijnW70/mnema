@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor = may break,
 patch = additive or fixes).
 
+## [0.1.6] - 2026-07-15
+
+### Added
+- **Store migration between embedders.** `Mnema::migrate` re-embeds a store under a new embedder
+  (of any vector width), preserving every memory, belief, and the clock — and `mnema-server
+  --migrate` exposes it: re-embed an existing store under this build's embedder, then exit. This is
+  how you move a lexical store to a semantic build (`http-embed` / `local-embed`) without losing
+  data. When a mismatched build refuses to open a store, the error now names the exact
+  `--migrate` command to run.
+
 ## [0.1.5] - 2026-07-15
 
 ### Added
@@ -109,6 +119,7 @@ Initial release: a local, encrypted memory layer for AI agents.
 - **Zero-friction install** — prebuilt binaries via `curl | sh` / PowerShell, plus `mnema keygen`
   for a strong `$MNEMA_KEY` passphrase.
 
+[0.1.6]: https://github.com/MerlijnW70/mnema/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/MerlijnW70/mnema/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/MerlijnW70/mnema/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/MerlijnW70/mnema/compare/v0.1.2...v0.1.3

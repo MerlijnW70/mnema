@@ -1,6 +1,6 @@
 [package]
 name = "mnema-core"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 repository = "https://github.com/MerlijnW70/mnema"
 description = "Zero-dependency core of mnema: the egress-filter privacy invariant, the memory model, and pure-logic retrieval/semantic/vector/working stores."
