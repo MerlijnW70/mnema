@@ -91,7 +91,9 @@ Your agent now has `remember`, `recall`, `recent`, and more. Everything stays on
 | `mnema rekey <store>` | Re-encrypt the store under a fresh key |
 
 The MCP server exposes the same surface as tools — `remember`, `recall`, `recent`, `remember_fact`,
-`beliefs`, `forget`, `forget_fact`, `reinforce`, `prune`, `stats`. By default recall never returns
+`beliefs`, `forget`, `forget_fact`, `reinforce`, `prune`, `stats` — plus a **`mnema://recent`
+resource** (recent memories a client can auto-load as session-start context) and a **`recall`
+prompt** (pull relevant memories into the conversation on demand). By default recall never returns
 `private` memories; launch `mnema-server --local` **only when it feeds an on-device model** to let
 recall surface them.
 
