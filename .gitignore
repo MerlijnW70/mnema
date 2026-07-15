@@ -34,3 +34,6 @@ internal-tool.yaml
 
 # Internal design docs (ADRs, design proposal) — kept local, not published.
 docs/
+
+# LoCoMo dataset (third-party, not vendored — see benches/locomo.rs header)
+locomo10.json
