@@ -3,12 +3,18 @@ name: publish
 # Publish the current Cargo.toml version to crates.io from GitHub's clean network — useful when
 # your own network is behind a TLS-inspecting proxy that mangles the upload (a 406 from Fastly).
 #
+# Runs automatically on every release tag (checked out at the tag, so the published version always
+# matches the release), and stays manually dispatchable. Publishing is idempotent: a version
+# already on crates.io is skipped, so re-running a tag never fails.
+#
 # One-time setup: add your crates.io token as a repo secret named CARGO_REGISTRY_TOKEN
 #   (Settings → Secrets and variables → Actions), or: gh secret set CARGO_REGISTRY_TOKEN
 # Then run it: Actions → publish → "Run workflow", or `gh workflow run publish.yml`.
 
 on:
   workflow_dispatch:
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -30,5 +36,16 @@ jobs:
         # publish resolves the dependency. If crates.io index propagation lags, re-run just the
         # umbrella step (`cargo publish -p mnema`).
         run: |
-          cargo publish -p mnema-core
-          cargo publish -p mnema
+          set -euo pipefail
+          publish_if_new() {
+            crate="$1"
+            ver="$(cargo pkgid -p "$crate" | sed 's/.*[@#]//')"
+            if curl -fsS -H 'User-Agent: mnema-publish (github actions)' \
+                "https://crates.io/api/v1/crates/$crate/$ver" >/dev/null 2>&1; then
+              echo "$crate $ver is already on crates.io - skipping"
+            else
+              cargo publish -p "$crate"
+            fi
+          }
+          publish_if_new mnema-core
+          publish_if_new mnema

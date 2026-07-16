@@ -108,3 +108,82 @@ jobs:
             --pattern '*.tar.gz' --pattern '*.zip' --dir "$tmp"
           ( cd "$tmp" && sha256sum mnema-* > SHA256SUMS && cat SHA256SUMS )
           gh release upload "${{ github.ref_name }}" "$tmp/SHA256SUMS" --clobber
+
+  # Regenerate the Homebrew tap formula from this release's SHA256SUMS and push it, so
+  # `brew install MerlijnW70/mnema/mnema` never lags behind the GitHub release.
+  #
+  # One-time setup: a token with push access to MerlijnW70/homebrew-mnema as a repo secret
+  # named HOMEBREW_TAP_TOKEN (gh secret set HOMEBREW_TAP_TOKEN). Without it the job skips
+  # with a warning instead of failing the release.
+  homebrew:
+    needs: checksums
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bump the tap formula to ${{ github.ref_name }}
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set - skipping the Homebrew tap bump (the formula stays at its current version)"
+            exit 0
+          fi
+          ver="${TAG#v}"
+          tmp="$(mktemp -d)"
+          curl -fsSL "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS" -o "$tmp/SHA256SUMS"
+          sha() { awk -v f="mnema-$TAG-$1" '$2 == f {print $1}' "$tmp/SHA256SUMS"; }
+          for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+            [ -n "$(sha "$t.tar.gz")" ] || { echo "missing SHA256SUMS entry for $t"; exit 1; }
+          done
+          cat > "$tmp/mnema.rb" <<EOF
+          class Mnema < Formula
+            desc "Local, encrypted memory layer for AI agents - never forgets, never leaks to the cloud"
+            homepage "https://github.com/$REPO"
+            version "$ver"
+            license any_of: ["MIT", "Apache-2.0"]
+
+            on_macos do
+              on_arm do
+                url "https://github.com/$REPO/releases/download/$TAG/mnema-$TAG-aarch64-apple-darwin.tar.gz"
+                sha256 "$(sha aarch64-apple-darwin.tar.gz)"
+              end
+              on_intel do
+                url "https://github.com/$REPO/releases/download/$TAG/mnema-$TAG-x86_64-apple-darwin.tar.gz"
+                sha256 "$(sha x86_64-apple-darwin.tar.gz)"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/$REPO/releases/download/$TAG/mnema-$TAG-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "$(sha aarch64-unknown-linux-musl.tar.gz)"
+              end
+              on_intel do
+                url "https://github.com/$REPO/releases/download/$TAG/mnema-$TAG-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "$(sha x86_64-unknown-linux-musl.tar.gz)"
+              end
+            end
+
+            def install
+              bin.install "mnema", "mnema-server"
+            end
+
+            test do
+              assert_match(/[0-9a-f]{64}/, shell_output("#{bin}/mnema keygen"))
+            end
+          end
+          EOF
+          git clone "https://x-access-token:$TAP_TOKEN@github.com/MerlijnW70/homebrew-mnema.git" "$tmp/tap"
+          mkdir -p "$tmp/tap/Formula"
+          cp "$tmp/mnema.rb" "$tmp/tap/Formula/mnema.rb"
+          cd "$tmp/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "formula already at $ver - nothing to push"
+          else
+            git commit -am "mnema $TAG"
+            git push
+          fi
