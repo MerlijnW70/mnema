@@ -135,7 +135,15 @@ fn restrict_to_owner(path: &Path) -> std::io::Result<std::process::ExitStatus> {
         .status()
 }
 
-#[cfg(windows)]
+/// Create `path` new (unlinking any stale temp first, then `create_new`, so a pre-planted symlink
+/// is never followed), apply `restrict` to lock it down, and **fail closed** if the restriction
+/// did not succeed: the unprotected file is removed and an error returned, so a readable keyfile is
+/// never left behind. Deliberately NOT `#[cfg(windows)]`-gated (only its Windows caller and the
+/// `icacls`-based [`restrict_to_owner`] are) — this fail-closed control flow compiles and is
+/// unit-tested on every platform, so a mutation of the success check is caught by CI on Linux too,
+/// not only on a Windows runner. `#[allow(dead_code)]` off Windows: there the product's
+/// `open_private_new` uses the atomic `mode(0o600)` path, so only the test exercises this.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn open_private_new_with(
     path: &Path,
     restrict: fn(&Path) -> std::io::Result<std::process::ExitStatus>,
@@ -150,7 +158,7 @@ fn open_private_new_with(
         drop(f);
         let _ = std::fs::remove_file(path);
         return Err(std::io::Error::other(
-            "icacls could not restrict the keyfile to owner-only",
+            "could not restrict the keyfile to owner-only",
         ));
     }
     Ok(f)
@@ -386,30 +394,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[cfg(windows)]
     #[test]
     fn open_private_new_fails_and_removes_the_file_when_restriction_fails() {
-        // The unprotected-keyfile trap: if the ACL restriction fails, the open must FAIL and the
-        // file must be GONE — never a silently world-readable keyfile. Driven through a
-        // deterministic failing restrictor; the success side is asserted right after.
+        // The unprotected-keyfile trap: if the restriction step fails, the open must FAIL and the
+        // file must be GONE — never a silently world-readable keyfile. NOT #[cfg(windows)]: the
+        // fail-closed check in `open_private_new_with` compiles on every platform, so this portable
+        // test (a trivial exiting process supplies the ExitStatus) kills a mutation of that check
+        // on Linux CI too, not only on a Windows runner.
+        fn status_for(code: &str) -> std::io::Result<std::process::ExitStatus> {
+            #[cfg(windows)]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "exit", code])
+                    .status()
+            }
+            #[cfg(not(windows))]
+            {
+                std::process::Command::new("sh")
+                    .args(["-c", &format!("exit {code}")])
+                    .status()
+            }
+        }
         fn failing(_: &Path) -> std::io::Result<std::process::ExitStatus> {
-            std::process::Command::new("cmd")
-                .args(["/C", "exit", "1"])
-                .status()
+            status_for("1")
         }
         fn passing(_: &Path) -> std::io::Result<std::process::ExitStatus> {
-            std::process::Command::new("cmd")
-                .args(["/C", "exit", "0"])
-                .status()
+            status_for("0")
         }
-        let ts = TempStore::new("winrestrict");
+        let ts = TempStore::new("restrict_fail");
         let kf = keyfile_path(&ts.0);
+        // Restriction FAILS -> Err AND the file removed (kills `cond->false` and `!x->x`, which
+        // would keep the unprotected file / return Ok).
         let r = open_private_new_with(&kf, failing);
-        assert!(r.is_err(), "a failed ACL restriction must fail the open");
+        assert!(r.is_err(), "a failed restriction must fail the open");
         assert!(
             !kf.exists(),
             "an unprotected keyfile must never be left behind"
         );
+        // Restriction SUCCEEDS -> Ok AND the file kept (kills `cond->true`, which would error and
+        // remove the file even on a successful restriction).
         let f = open_private_new_with(&kf, passing).expect("a successful restriction opens");
         drop(f);
         assert!(kf.exists(), "the successfully restricted file must remain");
