@@ -3,16 +3,27 @@ name: installer-test
 # Prove the documented one-line installers actually work end-to-end on real machines: they fetch
 # the LATEST GitHub Release binaries, install them to PATH, and run. Complements the crates.io
 # build and the Homebrew tap's install-test. Runs the exact commands from the README.
+#
+# Trigger design: `push.paths` is IGNORED for tag pushes, so without a `branches` filter this
+# workflow fires on every release tag and races the release build (assets upload ~1 min after the
+# tag) - every release showed a spurious red "Not Found". The `branches` filter stops tag pushes
+# from matching; `workflow_run` re-tests AFTER the release workflow (and its assets) completes.
 on:
   workflow_dispatch:
   push:
+    branches: ["**"]
     paths:
       - "install.sh"
       - "install.ps1"
       - ".github/workflows/installer-test.yml"
+  workflow_run:
+    workflows: [release]
+    types: [completed]
 
 jobs:
   curl-sh:
+    # On workflow_run, only test against a release that actually succeeded.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     name: curl | sh (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -40,6 +51,7 @@ jobs:
           test -f "$store"
 
   powershell:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     name: irm | iex (windows)
     runs-on: windows-latest
     steps:
@@ -60,6 +72,40 @@ jobs:
           $store = Join-Path $env:RUNNER_TEMP 'fresh\nested\dir\t.store'   # dir does not exist yet
           & mnema remember $store open 'hello via the powershell installer'
           & mnema remember $store private 'a secret'
+          & mnema stats $store
+          & mnema recall $store 5 hello
+          if (-not (Test-Path $store)) { throw "store was not created" }
+
+  # Security-conscious users download the script and run it as a FILE instead of piping to iex.
+  # Windows PowerShell 5.1 (the stock shell) reads a BOM-less .ps1 as ANSI, so any non-ASCII byte
+  # in the script can break parsing (an em-dash once decoded as a cp1252 smart-quote and killed
+  # the whole script). `shell: powershell` below is 5.1, not pwsh - keep it that way.
+  powershell-51-file:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    name: download + run file (windows powershell 5.1)
+    runs-on: windows-latest
+    steps:
+      - name: Download install.ps1 and run it as a file under PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Join-Path $env:RUNNER_TEMP 'install.ps1'
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.ps1" -OutFile $script
+          & $script
+          if (-not $?) { throw "install.ps1 failed under Windows PowerShell 5.1" }
+
+      - name: Run the installed binaries end-to-end
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:LOCALAPPDATA 'mnema\bin'
+          $env:PATH = "$bin;$env:PATH"
+          & mnema-server --help
+          $key = (& mnema keygen).Trim()
+          if ($key.Length -ne 64) { throw "keygen wrong length: $($key.Length)" }
+          $env:MNEMA_KEY = $key
+          $store = Join-Path $env:RUNNER_TEMP 'fresh\nested\dir\t.store'   # dir does not exist yet
+          & mnema remember $store open 'hello via the downloaded installer file'
           & mnema stats $store
           & mnema recall $store 5 hello
           if (-not (Test-Path $store)) { throw "store was not created" }

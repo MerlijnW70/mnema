@@ -1,5 +1,9 @@
-# mnema installer for Windows — downloads prebuilt mnema.exe (CLI) + mnema-server.exe (MCP server).
+# mnema installer for Windows - downloads prebuilt mnema.exe (CLI) + mnema-server.exe (MCP server).
 # No Rust toolchain required.
+#
+# KEEP THIS FILE PURE ASCII. Windows PowerShell 5.1 reads a BOM-less .ps1 file as ANSI, so a
+# UTF-8 em-dash decodes as a cp1252 smart-quote that terminates string literals and the whole
+# script fails to parse for anyone who downloads it and runs it as a file (instead of irm | iex).
 #
 #   irm https://raw.githubusercontent.com/MerlijnW70/mnema/main/install.ps1 | iex
 #
@@ -15,7 +19,7 @@ $binDir = if ($env:MNEMA_BIN_DIR) { $env:MNEMA_BIN_DIR } else { Join-Path $env:L
 # Only x86_64 Windows binaries are published; arm64 users can 'cargo install' from source.
 $arch = $env:PROCESSOR_ARCHITECTURE
 if ($arch -ne 'AMD64') {
-    throw "unsupported architecture '$arch' — run: cargo install --git https://github.com/$repo mnema --features mcp"
+    throw "unsupported architecture '$arch' - run: cargo install --git https://github.com/$repo mnema --features mcp"
 }
 $target = 'x86_64-pc-windows-msvc'
 
@@ -34,7 +38,7 @@ if (-not $tag) {
     }
     catch {}
 }
-if (-not $tag) { throw "could not resolve the latest release — set MNEMA_VERSION (e.g. v0.1.0)" }
+if (-not $tag) { throw "could not resolve the latest release - set MNEMA_VERSION (e.g. v0.1.0)" }
 
 $asset = "mnema-$tag-$target.zip"
 $url = "https://github.com/$repo/releases/download/$tag/$asset"
@@ -45,20 +49,20 @@ try {
     Write-Host "Downloading $asset ..."
     Invoke-WebRequest -Uri $url -OutFile $zip
 
-    # Verify against the release's SHA256SUMS — don't blindly trust what the URL served. Refuse on
+    # Verify against the release's SHA256SUMS - don't blindly trust what the URL served. Refuse on
     # mismatch, or if the release predates checksums (v0.1.4+).
     $sumsFile = Join-Path $tmp 'SHA256SUMS'
     try {
         Invoke-WebRequest -Uri "https://github.com/$repo/releases/download/$tag/SHA256SUMS" -OutFile $sumsFile
     } catch {
-        throw "could not fetch SHA256SUMS for $tag — refusing to install unverified (releases before v0.1.4 have none; set MNEMA_VERSION to v0.1.4 or later)"
+        throw "could not fetch SHA256SUMS for $tag - refusing to install unverified (releases before v0.1.4 have none; set MNEMA_VERSION to v0.1.4 or later)"
     }
     $line = Select-String -Path $sumsFile -SimpleMatch $asset | Select-Object -First 1
-    if (-not $line) { throw "SHA256SUMS has no entry for $asset — refusing to install unverified" }
+    if (-not $line) { throw "SHA256SUMS has no entry for $asset - refusing to install unverified" }
     $expected = ($line.Line -replace '\s.*', '').ToLower()
     $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
     if ($actual -ne $expected) {
-        throw "checksum mismatch for $asset — refusing to install (expected $expected, got $actual)"
+        throw "checksum mismatch for $asset - refusing to install (expected $expected, got $actual)"
     }
     Write-Host "Verified $asset (sha256 OK)."
 
@@ -80,14 +84,18 @@ try {
         Write-Host "Added $binDir to your user PATH (restart the shell to pick it up)."
     }
 
+    # Forward slashes: backslashes are escape characters in JSON, so a pasted "C:\Users\..." is
+    # invalid. JSON with forward slashes works fine in Windows paths.
+    $binJson = $binDir -replace '\\', '/'
+    $storeJson = "$env:USERPROFILE\mnema.store" -replace '\\', '/'
     Write-Host @"
 
 Point your MCP client at the server (it creates + encrypts the store on first use):
   {
     "mcpServers": {
       "mnema": {
-        "command": "$binDir\mnema-server.exe",
-        "args": ["--path", "$env:USERPROFILE\mnema.store"]
+        "command": "$binJson/mnema-server.exe",
+        "args": ["--path", "$storeJson"]
       }
     }
   }
