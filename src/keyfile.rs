@@ -418,9 +418,15 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn generate_keyfile_is_acl_restricted_to_the_owner_on_windows() {
-        // The Windows mirror of the unix 0600 test: the keyfile's ACL must carry NO inherited
-        // ACEs (no "(I)" markers — those are what hand BUILTIN\Users read access on non-profile
-        // paths) and exactly ONE explicit ACE, the owner-only grant.
+        // The Windows mirror of the unix 0600 test. Assert only on `icacls`'s **bracketed flag
+        // codes**, which are locale- and path-independent — principal names are localized
+        // (`OWNER RIGHTS` vs Dutch `EIGENDOMSRECHTEN`) and the temp path itself contains
+        // `C:\Users\...`, so any name/substring match is fragile. The security regression this
+        // guards is "the restriction was skipped": an unrestricted file in a profile directory
+        // INHERITS its parent's ACEs, which `icacls` marks `(I)`. So:
+        //   - no `(I)` anywhere  => inheritance was stripped (`/inheritance:r` ran);
+        //   - a `(F)` grant present => our explicit owner full-control ACE landed (not a broken,
+        //     empty ACL). Paths don't contain `(I)` / `(F)`, so neither is path-polluted.
         let ts = TempStore::new("winacl");
         let kf = keyfile_path(&ts.0);
         generate_keyfile(&kf).unwrap();
@@ -431,12 +437,11 @@ mod tests {
         let listing = String::from_utf8_lossy(&out.stdout).to_string();
         assert!(
             !listing.contains("(I)"),
-            "the keyfile must not inherit directory ACEs: {listing}"
+            "the keyfile must not inherit directory ACEs (restriction was skipped): {listing}"
         );
-        assert_eq!(
-            listing.matches(":(").count(),
-            1,
-            "exactly one explicit owner-only ACE: {listing}"
+        assert!(
+            listing.contains("(F)"),
+            "the explicit owner full-control ACE must be present: {listing}"
         );
     }
 }
