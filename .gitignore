@@ -27,6 +27,11 @@
 # Benchmark-scan output — kept local, never published or committed.
 .sota/
 
+# The LoCoMo dataset for `benches/locomo.rs` — a third party's (~2.8 MB), downloaded on demand
+# (see the bench header), never vendored into this repo.
+locomo10.json
+data/locomo10.json
+
 # Noha — the mutation-coverage trust layer — is COMMITTED, CI-enforced infrastructure (see
 # NOHA.md and the `noha` job in .github/workflows/ci.yml). The config (`noha.yaml` in each crate)
 # and the ratchet baseline (`.noha/baseline.tsv`, `.noha/INTEGRITY_PROMPT.md`) are source and are
@@ -35,6 +40,3 @@
 
 # Internal design docs (ADRs, design proposal) — kept local, not published.
 docs/
-
-# LoCoMo dataset (third-party, not vendored — see benches/locomo.rs header)
-locomo10.json

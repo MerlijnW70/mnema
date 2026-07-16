@@ -198,6 +198,7 @@ impl IvfIndex {
         let mut best: Option<(usize, f32)> = None;
         for (i, anchor) in self.anchors.iter().enumerate() {
             let sim = cosine(vector, anchor);
+            // `is_none_or` avoids the `best.is_none() || sim > best.unwrap().1` unwrap: no fail-open site to justify.
             if best.is_none_or(|(_, b)| sim > b) {
                 best = Some((i, sim));
             }

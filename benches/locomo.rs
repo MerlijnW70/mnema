@@ -20,8 +20,9 @@
 //!
 //! Reported: mean **Recall@k** = (gold evidence turns retrieved in top-k) / (gold evidence turns),
 //! averaged over every answerable question, for the lexical default vs the semantic
-//! (all-MiniLM-L6-v2 + dense-weighted) path. Full-dataset result (2026-07): lexical R@5 0.225 /
-//! R@10 0.323 · semantic R@5 0.385 / R@10 0.453 (+16.0 pts R@5 over 1981 questions).
+//! (all-MiniLM-L6-v2 + dense-weighted) path. Full-dataset result (2026-07-15, code at 0.1.9, all
+//! 10 conversations clean, no retries): lexical R@5 0.245 / R@10 0.380 · semantic R@5 0.401 /
+//! R@10 0.467 (+15.6 pts R@5 over 1981 questions).
 
 #[cfg(all(feature = "secure", feature = "local-embed"))]
 use mnema::{

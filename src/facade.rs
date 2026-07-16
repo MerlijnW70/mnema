@@ -494,10 +494,11 @@ impl<E: Embedder> Mnema<E> {
         s
     }
 
-    /// Encrypt the whole memory at rest — the episodic log, the semantic beliefs, and
-    /// the logical clock — as one blob (`salt || nonce || AEAD(...)`). The vector index
-    /// is *derived* (rebuildable by re-embedding), so it is not stored; [`open`]
-    /// reconstructs it. Sealing routes through the same AEAD as the raw store.
+    /// Encrypt the whole memory at rest — the episodic log, the semantic beliefs, the logical
+    /// clock, and the vector index — as one blob (`salt || nonce || AEAD(...)`). The index is
+    /// *derived* (rebuildable by re-embedding), but its vectors are persisted too so [`open`] can
+    /// skip re-embedding every memory; a store sealed without them is opened by re-embedding.
+    /// Sealing routes through the same AEAD as the raw store.
     ///
     /// [`open`]: Mnema::open
     /// The passphrase is used to derive the sealing key **once** — on the first seal (or at
@@ -513,6 +514,11 @@ impl<E: Embedder> Mnema<E> {
         plain.extend_from_slice(&self.clock.to_le_bytes());
         put_bytes(&mut plain, &self.episodic.encode());
         put_bytes(&mut plain, &encode_facts(self.semantic.facts()));
+        // The vector index IS derived, but re-embedding every memory on open is expensive with a
+        // real model/HTTP embedder — so persist the vectors too, as a trailing blob. `open` reuses
+        // them when this embedder still reproduces them (a probe), else re-embeds. An older reader
+        // that stops after the facts ignores this blob, so the format stays backward-compatible.
+        put_bytes(&mut plain, &encode_vectors(&self.index));
         // Reuse the cached key only if it was derived from THIS passphrase; a new passphrase
         // (e.g. `mnema rekey`) re-derives with a fresh salt.
         let reuse = self
@@ -531,8 +537,9 @@ impl<E: Embedder> Mnema<E> {
     /// Recover a whole memory from a [`seal`](Mnema::seal)ed blob with `passphrase` and an
     /// `embedder` whose `dims()` **must** match the one that sealed it — a mismatch is refused
     /// with [`StoreError::EmbedderWidthMismatch`], never silently applied (ADR-0023). The
-    /// episodic log, beliefs, and clock are restored verbatim; the vector index is rebuilt by
-    /// re-embedding every event, so recall resumes immediately. A wrong key or tampering
+    /// episodic log, beliefs, and clock are restored verbatim; the vector index is reused from the
+    /// persisted vectors when this embedder still reproduces them, else re-embedded from the events,
+    /// so recall resumes immediately either way. A wrong key or tampering
     /// yields [`StoreError::Decrypt`].
     pub fn open(blob: &[u8], passphrase: &[u8], embedder: E) -> Result<Self, StoreError> {
         Self::open_inner(blob, passphrase, embedder, true)
@@ -574,17 +581,14 @@ impl<E: Embedder> Mnema<E> {
         }
         let (clock, off) = take_u64(&plain, off)?;
         let (episodic_bytes, off) = take_bytes(&plain, off)?;
-        let (semantic_bytes, _off) = take_bytes(&plain, off)?;
+        let (semantic_bytes, off) = take_bytes(&plain, off)?;
 
         let episodic = EpisodicLog::decode(episodic_bytes)?;
         let semantic = SemanticStore::from_facts(decode_facts(semantic_bytes)?);
 
-        // The index is derived: rebuild it from the events under `embedder` (same id space; a new
-        // width when migrating).
-        let mut index = VectorIndex::new(embedder.dims());
-        for e in episodic.events() {
-            let _ = index.insert(e.id, embedder.embed(&e.content));
-        }
+        // Restore the vector index: reuse the persisted vectors if present and this embedder still
+        // reproduces them, else re-embed (migration, a changed embedder, or an older store).
+        let index = Self::restore_index(&plain, off, &episodic, &embedder)?;
 
         Ok(Self {
             episodic,
@@ -597,6 +601,48 @@ impl<E: Embedder> Mnema<E> {
             clock,
             seal_key: Some(seal_key),
         })
+    }
+
+    /// Build the vector index for a freshly-opened store. If the plaintext carries persisted vectors
+    /// (from `off` onward) **and** this embedder reproduces the first one (a one-vector probe: same
+    /// model + width, deterministic), reuse them as-is — the win, since re-embedding every memory is
+    /// a forward pass each, painful with a model/HTTP embedder. Otherwise (a changed embedder, a
+    /// width change on `migrate`, or an older store with no blob) re-embed. The probe makes reuse
+    /// *safe*: a mismatch can only cost a re-embed, never surface vectors inconsistent with queries.
+    fn restore_index(
+        plain: &[u8],
+        off: usize,
+        episodic: &EpisodicLog,
+        embedder: &E,
+    ) -> Result<VectorIndex, StoreError> {
+        let mut index = VectorIndex::new(embedder.dims());
+        let persisted = if off < plain.len() {
+            let (vec_bytes, _) = take_bytes(plain, off)?;
+            Some(decode_vectors(vec_bytes)?)
+        } else {
+            None // an older store sealed before vectors were persisted
+        };
+        let trusted = persisted
+            .as_ref()
+            .and_then(|p| p.first())
+            .is_some_and(|(id, v)| {
+                v.len() == embedder.dims()
+                    && episodic
+                        .events()
+                        .iter()
+                        .find(|e| e.id == *id)
+                        .is_some_and(|e| embedder.embed(&e.content) == *v)
+            });
+        if trusted {
+            for (id, v) in persisted.expect("trusted implies the vectors are present") {
+                let _ = index.insert(id, v);
+            }
+        } else {
+            for e in episodic.events() {
+                let _ = index.insert(e.id, embedder.embed(&e.content));
+            }
+        }
+        Ok(index)
     }
 
     /// Write to the ephemeral scratchpad (working memory): a short-lived note stamped
@@ -647,6 +693,46 @@ fn tier_from_tag(tag: u8) -> Result<EgressTier, StoreError> {
 
 /// Serialize semantic facts: per fact `id(8) | at(8) | confidence(4) | status(1) | tier(1)`
 /// then the length-prefixed subject, attribute, and value.
+/// Serialize the exact index's `(id, vector)` pairs so a later [`open`](Mnema::open) can restore the
+/// embeddings without re-embedding every memory. Layout: `count(u32)` then, per entry, `id(u64)`
+/// followed by a length-prefixed run of little-endian `f32`. Appended as a trailing blob in the
+/// sealed plaintext, so an older reader that stops after the facts simply ignores it.
+fn encode_vectors(index: &VectorIndex) -> Vec<u8> {
+    let entries: Vec<(MemoryId, &[f32])> = index.entries().collect();
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for (id, v) in entries {
+        buf.extend_from_slice(&id.to_le_bytes());
+        let mut bytes = Vec::with_capacity(v.len() * 4);
+        for &x in v {
+            bytes.extend_from_slice(&x.to_le_bytes());
+        }
+        put_bytes(&mut buf, &bytes);
+    }
+    buf
+}
+
+/// Parse the persisted `(id, vector)` pairs written by [`encode_vectors`]. Every read is
+/// bounds-checked, so a truncated blob yields [`StoreError::Truncated`], never a panic.
+fn decode_vectors(buf: &[u8]) -> Result<Vec<(MemoryId, Vec<f32>)>, StoreError> {
+    let (count, mut off) = take_u32(buf, 0)?;
+    let mut out = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let (id, o) = take_u64(buf, off)?;
+        let (vec_bytes, next) = take_bytes(buf, o)?;
+        off = next;
+        if !vec_bytes.len().is_multiple_of(4) {
+            return Err(StoreError::Truncated);
+        }
+        let vector = vec_bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        out.push((id, vector));
+    }
+    Ok(out)
+}
+
 fn encode_facts(facts: &[Fact]) -> Vec<u8> {
     let mut buf = Vec::new();
     for f in facts {
@@ -1152,6 +1238,108 @@ mod tests {
             calls.get(),
             3,
             "build_ann reuses cached vectors — no re-embedding"
+        );
+    }
+
+    // An embedder that tallies its `embed` calls; `bias` shifts the output so two instances of
+    // different bias produce different vectors for the same text (a "changed model").
+    struct CountingEmbedder {
+        calls: std::rc::Rc<std::cell::Cell<usize>>,
+        bias: f32,
+    }
+    impl crate::vector::Embedder for CountingEmbedder {
+        fn dims(&self) -> usize {
+            2
+        }
+        fn embed(&self, text: &str) -> Vec<f32> {
+            self.calls.set(self.calls.get() + 1);
+            let n = text.len() as f32 + self.bias;
+            vec![n, n + 1.0]
+        }
+    }
+
+    #[test]
+    fn open_reuses_persisted_vectors_instead_of_re_embedding() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let seal_calls = Rc::new(Cell::new(0));
+        let mut mem = Mnema::new(CountingEmbedder {
+            calls: Rc::clone(&seal_calls),
+            bias: 0.0,
+        });
+        mem.remember(EgressTier::Open, "alpha");
+        mem.remember(EgressTier::Open, "beta");
+        mem.remember(EgressTier::Open, "gamma");
+        assert_eq!(seal_calls.get(), 3, "one embed per remember");
+        let blob = mem.seal(b"pw").unwrap();
+
+        // Reopen with the SAME embedder. It embeds exactly once — the one-vector probe — then reuses
+        // the persisted vectors for all three memories instead of re-embedding each.
+        let open_calls = Rc::new(Cell::new(0));
+        let reopened = Mnema::open(
+            &blob,
+            b"pw",
+            CountingEmbedder {
+                calls: Rc::clone(&open_calls),
+                bias: 0.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            open_calls.get(),
+            1,
+            "only the probe embeds — vectors reused"
+        );
+        assert_eq!(reopened.indexed(), 3, "every memory is in the index");
+        // The reused vectors still drive recall.
+        let hits = reopened.recall("alpha", Destination::Local, 5, 1000);
+        assert!(hits.iter().any(|b| b.text == "alpha"));
+    }
+
+    #[test]
+    fn open_re_embeds_when_the_embedder_no_longer_reproduces_the_vectors() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let seal_calls = Rc::new(Cell::new(0));
+        let mut mem = Mnema::new(CountingEmbedder {
+            calls: Rc::clone(&seal_calls),
+            bias: 0.0,
+        });
+        mem.remember(EgressTier::Open, "alpha");
+        mem.remember(EgressTier::Open, "beta");
+        mem.remember(EgressTier::Open, "gamma");
+        let blob = mem.seal(b"pw").unwrap();
+
+        // Reopen with a DIFFERENT same-width embedder (a changed model): the probe on the first
+        // memory fails to reproduce the persisted vector, so the store re-embeds all three rather
+        // than trusting stale vectors — safety over the reuse win.
+        let open_calls = Rc::new(Cell::new(0));
+        let reopened = Mnema::open(
+            &blob,
+            b"pw",
+            CountingEmbedder {
+                calls: Rc::clone(&open_calls),
+                bias: 100.0,
+            },
+        )
+        .unwrap();
+        // The probe embeds once (the first memory), fails to match, then re-embeds all three:
+        // 1 probe + 3 = 4. Still far cheaper than the reuse-miss being a silent correctness bug.
+        assert_eq!(
+            open_calls.get(),
+            4,
+            "probe (1) fails → re-embed every memory (3)"
+        );
+        assert_eq!(reopened.indexed(), 3);
+        // The index now holds the NEW embedder's vectors, not the persisted ones: "alpha" is 5
+        // chars, so under bias 100 it embeds to (105, 106); the reused (bias-0) vector would have
+        // been (5, 6). Inspect the raw index to prove the rebuild happened at the new bias.
+        let vectors: Vec<Vec<f32>> = reopened.index.entries().map(|(_, v)| v.to_vec()).collect();
+        assert!(
+            vectors.contains(&vec![105.0, 106.0]),
+            "vectors rebuilt at the new bias, not reused from the seal"
         );
     }
 

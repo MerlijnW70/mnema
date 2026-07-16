@@ -5,7 +5,7 @@ members = ["mnema-core"]
 
 [package]
 name = "mnema"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 repository = "https://github.com/MerlijnW70/mnema"
 description = "A local, encrypted memory layer for AI agents — never forgets, never leaks to the cloud."
@@ -29,7 +29,7 @@ features = ["mcp", "http-embed"]
 # The zero-dependency core — the egress invariant, memory model, and pure-logic stores. This is the
 # ONLY non-optional dependency, and it is itself a zero-dependency leaf (path within the workspace; the
 # version pin keeps a crates.io publish honest).
-mnema-core = { path = "mnema-core", version = "0.1.8" }
+mnema-core = { path = "mnema-core", version = "0.1.9" }
 
 # The `secure` feature (encryption at rest for the episodic store + the Mnema facade):
 # a small, vetted, safe-Rust crypto set — OPTIONAL, so the core (retrieval, semantic,
@@ -162,6 +162,20 @@ harness = false
 #   LOCOMO_PATH=locomo10.json cargo bench --bench locomo --features secure,local-embed
 [[bench]]
 name = "locomo"
+harness = false
+
+# End-to-end QA accuracy on LoCoMo (the LLM-judged headline metric), fully local via Ollama.
+# Needs a running `ollama serve` + `ollama pull llama3.2:3b`, the dataset, and LOCOMO_PATH:
+#   LOCOMO_PATH=locomo10.json cargo bench --bench locomo_qa --features secure,local-embed,http-embed
+[[bench]]
+name = "locomo_qa"
+harness = false
+
+# Fusion-weight sweep on LoCoMo retrieval: tune RetrievalWeights against real Recall@k. One
+# embedding pass per conversation (memoizing embedder), many configs re-ranked for free.
+#   LOCOMO_PATH=locomo10.json cargo bench --bench locomo_sweep --features secure,local-embed
+[[bench]]
+name = "locomo_sweep"
 harness = false
 
 [dev-dependencies]
