@@ -52,8 +52,9 @@ jobs:
           targets: wasm32-unknown-unknown
       # The core must stay a strictly zero-dependency leaf. `mnema-core` is a separate crate precisely so
       # this is mechanically true, not aspirational: its `cargo tree` must be a single line (itself, no
-      # edges). This is the repo-agnostic CI enforcement; a developer's local `internal-tool gate` adds the fuller
-      # source-level certification (no non-std/local `use`, `forbid(unsafe_code)`).
+      # edges). This is the repo-agnostic CI enforcement; the `internal-tool` job below adds the fuller
+      # source-level certification (no non-std/local `use`, `forbid(unsafe_code)`, the import
+      # constraints, the fail-closed lint, and behavioral mutation coverage on changed lines).
       - name: mnema-core is a zero-dependency leaf
         run: |
           tree=$(cargo tree -p mnema-core -e normal --prefix none)
@@ -78,3 +79,77 @@ jobs:
           cargo doc --no-deps --features mcp,http-embed
       # The zero-dependency core must stay WebAssembly-compatible (browser / edge).
       - run: cargo build -p mnema-core --target wasm32-unknown-unknown
+
+  # internal-tool — the trust layer, dogfooded on mnema itself. Two guards:
+  #   1. `internal-tool gate` in mnema-core: the leaf is a zero-dependency, unsafe-free crate whose imports
+  #      obey the declared architectural constraints (pure logic — no fs/net/process/env) and the
+  #      fail-closed lint. Platform-independent, deterministic.
+  #   2. `internal-tool prober --diff`: behavioral mutation coverage on the lines THIS change touches — every
+  #      mutation of changed logic must be caught by a test, or the build reds. Runs on Linux so the
+  #      `#[cfg(unix)]` file-permission / durability paths compile and are covered (the four accepted
+  #      survivors in the committed baseline are `cfg(unix)` best-effort fsync + OpenOptions flags; see
+  #      internal-tool.md). Diff-scoped, so it is fast and needs no cross-platform full baseline.
+  internal-tool:
+    name: internal-tool · gate + mutation coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `prober --diff` needs the base commit to compute the changed-line set.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+      # Install the prebuilt internal-tool binary from the (private) release. Needs a repo secret
+      # internal-tool_INSTALL_TOKEN — a fine-grained PAT with read access to MerlijnW70/private (Contents:
+      # read) — since a public install.sh curl 404s on a private repo. Pinned version + SHA256
+      # verification: a trust layer verifies its own binary. Bump internal-tool_VERSION deliberately.
+      - name: install internal-tool
+        env:
+          # Read the raw secret into a plain var, then strip any whitespace/newline before use:
+          # a trailing newline in the stored secret makes `Authorization: Bearer <pat>\n` and GitHub
+          # answers 401 Bad credentials even for a perfectly valid token. PATs contain no
+          # whitespace, so trimming only ever removes storage pollution.
+          internal-tool_INSTALL_TOKEN: ${{ secrets.internal-tool_INSTALL_TOKEN }}
+          internal-tool_VERSION: v0.1.4
+          internal-tool_TARGET: x86_64-unknown-linux-musl
+        run: |
+          GH_TOKEN="$(printf '%s' "$internal-tool_INSTALL_TOKEN" | tr -d '[:space:]')"
+          export GH_TOKEN
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::internal-tool_INSTALL_TOKEN secret is empty — set a fine-grained PAT with Contents:read on MerlijnW70/private"; exit 1
+          fi
+          # --- diagnostics (safe: length only, never the value) ---
+          echo "trimmed token length: ${#GH_TOKEN}  (fine-grained PAT ~93, classic ~40)"
+          if gh api user -q .login >/tmp/who 2>/tmp/err; then
+            echo "token authenticates to GitHub as: $(cat /tmp/who)"
+          else
+            echo "::error::the stored token is REJECTED by GitHub itself (gh api user): $(cat /tmp/err)"; exit 1
+          fi
+          # --- end diagnostics ---
+          asset="internal-tool-${internal-tool_TARGET}.tar.gz"
+          tmp="$(mktemp -d)"
+          gh release download "$internal-tool_VERSION" --repo MerlijnW70/private \
+            --pattern "$asset" --pattern SHA256SUMS --dir "$tmp"
+          ( cd "$tmp" && grep " $asset\$" SHA256SUMS | sha256sum -c - ) \
+            || { echo "::error::internal-tool checksum mismatch — refusing to run an unverified gate"; exit 1; }
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          mkdir -p "$HOME/.local/bin"
+          cp "$tmp/internal-tool-${internal-tool_TARGET}/internal-tool" "$HOME/.local/bin/internal-tool"
+          chmod +x "$HOME/.local/bin/internal-tool"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/internal-tool" version
+      # The zero-dependency leaf certification: boundary + import constraints + fail-closed + surface.
+      - name: internal-tool gate (mnema-core leaf)
+        working-directory: mnema-core
+        run: internal-tool gate
+      # Behavioral mutation coverage on the changed lines vs the PR base (or the previous commit on a
+      # push). No new survivors: every mutation of the logic this change introduces must be killed.
+      - name: internal-tool prober --diff (changed lines)
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD~1"
+          fi
+          echo "probing changed lines vs $base"
+          internal-tool prober --diff "$base"

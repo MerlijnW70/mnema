@@ -32,13 +32,11 @@
 locomo10.json
 data/locomo10.json
 
-# The local mutation-coverage gate's config, baseline, and binaries — a per-machine dev
-# install, not source. Kept on disk to run the gate locally; never published or committed.
-.internal-tool/
-internal-tool.yaml
+# internal-tool — the mutation-coverage trust layer — is COMMITTED, CI-enforced infrastructure (see
+# internal-tool.md and the `internal-tool` job in .github/workflows/ci.yml). The config (`internal-tool.yaml` in each crate)
+# and the ratchet baseline (`.internal-tool/baseline.tsv`, `.internal-tool/INTEGRITY_PROMPT.md`) are source and are
+# tracked. Only the per-machine TIA scan cache is regenerable and stays out of version control.
+.internal-tool/tia.tsv
 
 # Internal design docs (ADRs, design proposal) — kept local, not published.
 docs/
-
-# LoCoMo dataset (third-party, not vendored — see benches/locomo.rs header)
-locomo10.json

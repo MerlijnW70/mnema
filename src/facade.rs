@@ -141,8 +141,12 @@ impl<E: Embedder> Mnema<E> {
         // `decayed_score`/`is_faded` comparison false — corrupting recall order and leaving the
         // memory *un-prunable* — and `inf` swamps all ranking. Sanitize to neutral salience so a
         // bad input (e.g. a huge JSON number that overflows `f32` to `inf`) can't wreck retrieval.
+        // A NEGATIVE importance is clamped to 0.0 for the same reason: `Memory::importance` is
+        // documented `[0, ∞)`, a negative flips `decayed_score`'s sign — the STRONGEST match
+        // ranks last among negatives — and gives `is_faded` a salience below every non-negative
+        // threshold, so `prune(…, 0.0)` (documented to prune nothing) would delete the memory.
         let importance = if importance.is_finite() {
-            importance
+            importance.max(0.0)
         } else {
             1.0
         };
@@ -336,8 +340,21 @@ impl<E: Embedder> Mnema<E> {
             .collect();
         let corpus: Vec<Vec<f32>> = vectors.iter().map(|(_, v)| v.clone()).collect();
         let anchors = crate::vector::kmeans_anchors(&corpus, num_anchors, ANN_KMEANS_ITERS);
+        // An empty anchor set (an empty corpus, or num_anchors 0) can index NOTHING — every
+        // insert below would fail with NoAnchors. Installing that ANN would silently disable
+        // the dense retriever in `recall_fast` (it prefers `self.ann` over the exact index),
+        // turning "never worse than exact" false with no signal. Leave the ANN unset instead:
+        // recall_fast falls back to the exact index, and a later, post-corpus `build_ann`
+        // installs a real one.
+        if anchors.is_empty() {
+            self.ann = None;
+            return;
+        }
         let mut ann = IvfIndex::new(self.embedder.dims(), anchors);
         for (id, v) in vectors {
+            // With non-empty anchors the only per-vector failure is a width mismatch, which
+            // the exact index already tolerates the same way: the memory stays stored and
+            // recallable lexically, just not densely.
             let _ = ann.insert(id, v);
         }
         self.ann = Some(ann);
@@ -870,6 +887,63 @@ mod tests {
         let receipt = e.prune_faded(0, 2.0);
         assert_eq!(receipt.purged, vec![nan, inf]);
         assert_eq!(receipt.remaining, 0);
+    }
+
+    #[test]
+    fn remember_with_clamps_a_negative_importance_to_zero() {
+        // `Memory::importance` is documented [0, ∞). A negative flips `decayed_score`'s sign
+        // (the strongest match would rank LAST among negatives) and drops `is_faded`'s salience
+        // below every non-negative threshold — so `prune_faded(0, 0.0)`, documented to prune
+        // nothing, would delete the memory. Clamped to 0.0, both invariants hold.
+        let mut e = Mnema::new(VowelEmbedder);
+        e.remember_with(EgressTier::Open, -1.0, "aaa", "");
+        let receipt = e.prune_faded(0, 0.0);
+        assert!(
+            receipt.purged.is_empty(),
+            "threshold 0.0 must prune nothing, even after a negative-importance remember"
+        );
+        assert_eq!(receipt.remaining, 1);
+    }
+
+    #[test]
+    fn build_ann_on_an_empty_corpus_leaves_the_exact_index_in_charge() {
+        // Setup-order mistake: build_ann before any remember. An ANN with zero anchors can
+        // never return a hit; installing it would silently disable the dense retriever in
+        // recall_fast (it prefers the ANN over the exact index) — "never worse than exact"
+        // would be false with no signal. It must not be installed.
+        let mut e = Mnema::new(VowelEmbedder);
+        e.build_ann(8);
+        e.remember(EgressTier::Open, "aeiou aeiou aeiou"); // vowel-heavy: strong dense signal
+        e.remember(EgressTier::Open, "zzz zzz zzz");
+        let fast = e.recall_fast("aeiou", Destination::Local, 10, 1_000, 8);
+        let exact = e.recall("aeiou", Destination::Local, 10, 1_000);
+        assert_eq!(
+            fast.iter().map(|b| b.id).collect::<Vec<_>>(),
+            exact.iter().map(|b| b.id).collect::<Vec<_>>(),
+            "an empty-anchor build_ann must fall back to the exact index, not go dense-blind"
+        );
+    }
+
+    #[test]
+    fn build_ann_installs_the_ivf_exactly_when_anchors_exist() {
+        // The empty-anchor guard, both sides. Empty corpus → k-means yields no anchors →
+        // the ANN must NOT be installed (a zero-anchor IVF can never return a hit, so
+        // recall_fast would go dense-blind while claiming to be built).
+        let mut e = Mnema::new(VowelEmbedder);
+        e.build_ann(8);
+        assert!(
+            e.ann.is_none(),
+            "empty corpus: build_ann must leave the ANN unset"
+        );
+        // Populated corpus → anchors exist → the ANN must be installed so recall_fast
+        // actually takes the approximate path.
+        e.remember(EgressTier::Open, "the cat sat");
+        e.remember(EgressTier::Open, "zzz zzz zzz");
+        e.build_ann(2);
+        assert!(
+            e.ann.is_some(),
+            "populated corpus: build_ann must install the ANN"
+        );
     }
 
     #[test]
