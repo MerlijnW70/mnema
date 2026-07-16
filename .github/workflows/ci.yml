@@ -119,6 +119,14 @@ jobs:
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::NOHA_INSTALL_TOKEN secret is empty — set a fine-grained PAT with Contents:read on MerlijnW70/emerge"; exit 1
           fi
+          # --- diagnostics (safe: length only, never the value) ---
+          echo "trimmed token length: ${#GH_TOKEN}  (fine-grained PAT ~93, classic ~40)"
+          if gh api user -q .login >/tmp/who 2>/tmp/err; then
+            echo "token authenticates to GitHub as: $(cat /tmp/who)"
+          else
+            echo "::error::the stored token is REJECTED by GitHub itself (gh api user): $(cat /tmp/err)"; exit 1
+          fi
+          # --- end diagnostics ---
           asset="noha-${NOHA_TARGET}.tar.gz"
           tmp="$(mktemp -d)"
           gh release download "$NOHA_VERSION" --repo MerlijnW70/emerge \
