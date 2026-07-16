@@ -251,16 +251,33 @@ fn content_similarity(a: &str, b: &str) -> f32 {
     intersection / union
 }
 
+/// The text a memory would actually EMIT for `dest` — content on `Allow`, the redacted surface
+/// on `Redact` — mirroring `pack_bundle`'s choice exactly. `Deny` never reaches the callers
+/// (they filter it first); its content is the conservative stand-in if one ever did.
+fn emitted_text(m: &Memory, dest: Destination) -> &str {
+    match crate::egress_decision(m.tier, dest) {
+        crate::EgressDecision::Redact => &m.redacted,
+        _ => &m.content,
+    }
+}
+
 /// Suppress near-duplicate memories from a relevance-ordered list: keep a memory only if it is
 /// less than `threshold` similar (token Jaccard) to every memory already kept, so the recall
 /// budget is not spent on repeats. Order is preserved — the first (most relevant) of a
 /// near-duplicate pair wins.
-fn dedup_similar<'a>(ordered: &[&'a Memory], threshold: f32) -> Vec<&'a Memory> {
+///
+/// Similarity is computed over each memory's **egress-visible text for `dest`**
+/// ([`emitted_text`]), not its stored content. Keying on hidden content breaks both ways on a
+/// Remote bundle: a `Redacted` memory whose *content* twins an `Open` one would suppress the
+/// Open twin and emit only its uninformative surface (the shareable answer never leaves), and
+/// two `Redacted` memories with distinct contents but the same surface would BOTH survive,
+/// emitting identical duplicate texts.
+fn dedup_similar<'a>(ordered: &[&'a Memory], dest: Destination, threshold: f32) -> Vec<&'a Memory> {
     let mut kept: Vec<&Memory> = Vec::new();
     for &m in ordered {
         let is_dup = kept
             .iter()
-            .any(|k| content_similarity(&m.content, &k.content) >= threshold);
+            .any(|k| content_similarity(emitted_text(m, dest), emitted_text(k, dest)) >= threshold);
         if !is_dup {
             kept.push(m);
         }
@@ -372,8 +389,9 @@ pub fn fuse_and_pack(
         .collect();
 
     // Suppress near-duplicate memories so the budget isn't spent on repeats (diversity),
-    // then pack the survivors through the egress choke point.
-    let diverse = dedup_similar(&ordered, DEDUP_THRESHOLD);
+    // then pack the survivors through the egress choke point. Dedup compares what each
+    // memory would EMIT for `dest`, so a redacted surface can't shadow a shareable twin.
+    let diverse = dedup_similar(&ordered, dest, DEDUP_THRESHOLD);
     super::pack_bundle(&diverse, dest, char_budget)
 }
 
@@ -524,21 +542,85 @@ mod tests {
         let b = mem(2, EgressTier::Open, 2, "epsilon delta gamma beta alpha"); // same token set
         let c = mem(3, EgressTier::Open, 1, "one two three four five"); // distinct
         let ordered = vec![&a, &b, &c];
-        let kept: Vec<MemoryId> = dedup_similar(&ordered, DEDUP_THRESHOLD)
+        let kept: Vec<MemoryId> = dedup_similar(&ordered, Destination::Local, DEDUP_THRESHOLD)
             .iter()
             .map(|m| m.id)
             .collect();
         assert_eq!(kept, vec![1, 3]); // 2 is a near-duplicate of 1; 3 survives
 
         // A threshold above 1.0 keeps everything.
-        let all: Vec<MemoryId> = dedup_similar(&ordered, 1.01).iter().map(|m| m.id).collect();
+        let all: Vec<MemoryId> = dedup_similar(&ordered, Destination::Local, 1.01)
+            .iter()
+            .map(|m| m.id)
+            .collect();
         assert_eq!(all, vec![1, 2, 3]);
 
         // At an exact-1.0 threshold, identical content IS a duplicate (`>=`, not `>`).
         let d = mem(4, EgressTier::Open, 1, "same words here");
         let e = mem(5, EgressTier::Open, 1, "same words here");
-        let kept2: Vec<MemoryId> = dedup_similar(&[&d, &e], 1.0).iter().map(|m| m.id).collect();
+        let kept2: Vec<MemoryId> = dedup_similar(&[&d, &e], Destination::Local, 1.0)
+            .iter()
+            .map(|m| m.id)
+            .collect();
         assert_eq!(kept2, vec![4]);
+    }
+
+    #[test]
+    fn dedup_compares_the_egress_visible_surface_not_the_hidden_content() {
+        // Remote-bound, a Redacted memory emits its surface. Two failure modes if dedup keys
+        // on the hidden content instead:
+        // (1) a Redacted memory whose CONTENT twins an Open one suppresses the Open twin —
+        //     the remote model receives only "[redacted]" while a fully shareable answer existed;
+        let redacted_twin = mem(
+            1,
+            EgressTier::Redacted,
+            2,
+            "project apollo launches march third from pad 39a",
+        );
+        let open_twin = mem(
+            2,
+            EgressTier::Open,
+            1,
+            "project apollo launches march third from pad 39a",
+        );
+        let kept: Vec<MemoryId> = dedup_similar(
+            &[&redacted_twin, &open_twin],
+            Destination::Remote,
+            DEDUP_THRESHOLD,
+        )
+        .iter()
+        .map(|m| m.id)
+        .collect();
+        assert_eq!(
+            kept,
+            vec![1, 2],
+            "remotely their EMITTED texts differ ([redacted] vs the content) — both must survive"
+        );
+        // Locally both emit their contents, which twin — the duplicate is suppressed.
+        let local: Vec<MemoryId> = dedup_similar(
+            &[&redacted_twin, &open_twin],
+            Destination::Local,
+            DEDUP_THRESHOLD,
+        )
+        .iter()
+        .map(|m| m.id)
+        .collect();
+        assert_eq!(local, vec![1]);
+
+        // (2) two Redacted memories with DISTINCT contents share the same surface: remotely
+        //     they would emit identical duplicate texts, so dedup must suppress one.
+        let r1 = mem(3, EgressTier::Redacted, 2, "alpha beta gamma");
+        let r2 = mem(4, EgressTier::Redacted, 1, "one two three");
+        let remote: Vec<MemoryId> =
+            dedup_similar(&[&r1, &r2], Destination::Remote, DEDUP_THRESHOLD)
+                .iter()
+                .map(|m| m.id)
+                .collect();
+        assert_eq!(
+            remote,
+            vec![3],
+            "identical '[redacted]' surfaces must not duplicate in a remote bundle"
+        );
     }
 
     #[test]

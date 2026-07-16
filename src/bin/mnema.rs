@@ -54,25 +54,61 @@ fn resolve_key(store: &Path) -> Vec<u8> {
 }
 
 fn load(store: &str) -> Mnema<HashEmbedder> {
-    let embedder = HashEmbedder::new(DIMS);
-    let path = Path::new(store);
-    if path.exists() {
-        let bytes = std::fs::read(store).unwrap_or_else(|e| die(&format!("read {store}: {e}")));
-        Mnema::open(&bytes, &resolve_key(path), embedder).unwrap_or_else(|_| {
-            die(
-                "cannot open store (wrong key or corrupt). If a `rekey` was interrupted, set \
-                 $MNEMA_KEY to the OLD passphrase and re-run `mnema rekey <store>` to finish it.",
-            )
-        })
-    } else {
-        Mnema::new(embedder)
+    try_load(store).unwrap_or_else(|msg| die(&msg))
+}
+
+/// Open the store at `store`, or start fresh **only if there is genuinely no file yet**.
+///
+/// Fail-closed on both axes a memory product cannot get wrong:
+/// - ONLY `NotFound` means "start fresh". Any other read error (permissions, a sharing
+///   violation, transient I/O) must NOT begin empty — the next `save` would overwrite, and
+///   destroy, the real store we merely failed to read. (`Path::exists()` cannot make this
+///   distinction: it reads `false` on a stat *error*, which is exactly the overwrite trap.)
+/// - The open error is *reported by cause*: a vector-width mismatch means "different
+///   embedder" (fix: migrate), an unknown format version means "newer mnema" (fix: upgrade)
+///   — telling the user "wrong key" for those would send them to the wrong repair.
+fn try_load(store: &str) -> Result<Mnema<HashEmbedder>, String> {
+    match std::fs::read(store) {
+        Ok(bytes) => {
+            let key = resolve_key(Path::new(store));
+            try_open(store, &bytes, &key)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Mnema::new(HashEmbedder::new(DIMS)))
+        }
+        Err(e) => Err(format!(
+            "read {store}: {e} — refusing to start an empty store over one that may exist. \
+             Resolve the I/O error and retry."
+        )),
+    }
+}
+
+/// Open an already-read store blob under `key`, mapping each failure to the repair the user
+/// actually needs (see [`try_load`]).
+fn try_open(store: &str, bytes: &[u8], key: &[u8]) -> Result<Mnema<HashEmbedder>, String> {
+    use mnema::store::StoreError;
+    match Mnema::open(bytes, key, HashEmbedder::new(DIMS)) {
+        Ok(m) => Ok(m),
+        Err(StoreError::EmbedderWidthMismatch { stored, embedder }) => Err(format!(
+            "{store} was written by a different embedder (vector width {stored}, this build \
+             uses {embedder}). Re-embed it once with `mnema-server --migrate --path {store}`, \
+             then retry."
+        )),
+        Err(StoreError::UnknownVersion) => Err(format!(
+            "{store} uses an on-disk format newer than this mnema understands — upgrade mnema."
+        )),
+        Err(e) => Err(format!(
+            "cannot open {store} ({e:?}) — wrong key or corrupt. If a `rekey` was \
+             interrupted, set $MNEMA_KEY to the OLD passphrase and re-run \
+             `mnema rekey {store}` to finish it."
+        )),
     }
 }
 
 fn save(store: &str, mem: &mut Mnema<HashEmbedder>) {
     let blob = mem
         .seal(&resolve_key(Path::new(store)))
-        .unwrap_or_else(|_| die("seal failed"));
+        .unwrap_or_else(|e| die(&format!("seal failed ({e:?})")));
     write_atomic(store, &blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
 }
 
@@ -177,6 +213,15 @@ fn rekey(store: &str) {
         .unwrap_or_else(|_| die("rekey: seal failed"));
     write_atomic(store, &blob).unwrap_or_else(|e| die(&format!("write {store}: {e}")));
     println!("rekeyed {store} under {}", keyfile.display());
+}
+
+/// The `forget-fact` deletion predicate: a belief is removed when its subject matches `subject`
+/// AND (no attribute filter was given, or its attribute matches). Split out of the inline
+/// closure so it is unit-testable in-process — the exact `subject == …` / `&&` / `||` boundary
+/// is load-bearing (get it wrong and `forget-fact` deletes the wrong beliefs), so it earns a
+/// direct test rather than only end-to-end coverage through the spawned binary.
+fn forget_fact_matches(subject: &str, attribute: &str, f_subject: &str, f_attribute: &str) -> bool {
+    f_subject == subject && (attribute.is_empty() || f_attribute == attribute)
 }
 
 fn tier(s: &str) -> EgressTier {
@@ -300,7 +345,7 @@ fn main() {
             let _lock = lock_store(store);
             let mut mem = load(store);
             let removed = mem.forget_facts(|f| {
-                f.subject == *subject && (attribute.is_empty() || f.attribute == attribute)
+                forget_fact_matches(subject, &attribute, &f.subject, &f.attribute)
             });
             save(store, &mut mem);
             println!("forgot {removed} belief record(s)");
@@ -318,5 +363,93 @@ fn main() {
         _ => die(
             "usage: mnema remember|recall|recent|fact|beliefs|reinforce|forget|forget-fact|stats|prune|rekey <store> ... | keygen  (see the source header)",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let mut d = std::env::temp_dir();
+        d.push(format!("mnema_cli_test_{name}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn forget_fact_matches_pins_the_subject_and_attribute_boundary() {
+        // Subject must match (== not !=): a different subject never matches, even on a shared
+        // attribute — the guard against `forget-fact alice color` deleting bob.color.
+        assert!(forget_fact_matches("alice", "color", "alice", "color"));
+        assert!(!forget_fact_matches("alice", "color", "bob", "color"));
+
+        // With NO attribute filter (empty), every belief of the subject matches (the `||` short-
+        // circuits true) — and none of another subject's.
+        assert!(forget_fact_matches("bob", "", "bob", "color"));
+        assert!(forget_fact_matches("bob", "", "bob", "size"));
+        assert!(!forget_fact_matches("bob", "", "alice", "color"));
+
+        // With an attribute filter, BOTH must match (the `&&`): right subject, wrong attribute
+        // does NOT match — distinguishes `&&` from `||`.
+        assert!(!forget_fact_matches("alice", "color", "alice", "size"));
+    }
+
+    #[test]
+    fn try_load_starts_fresh_only_for_a_genuinely_missing_file() {
+        let d = temp_dir("fresh");
+        let missing = d.join("no-such.store");
+        let m = try_load(missing.to_str().unwrap()).expect("a missing file starts fresh");
+        assert_eq!(m.len(), 0);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn try_load_refuses_when_the_path_stats_but_cannot_be_read_as_a_store_file() {
+        // The overwrite trap this exists to prevent: `Path::exists()`-style logic reads any
+        // stat/read error as "no store" and begins empty — then save() destroys the real store.
+        // A directory at the store path is a portable stand-in for "read fails, NOT NotFound":
+        // the load must REFUSE, never hand back an empty store.
+        let d = temp_dir("refuse");
+        let r = try_load(d.to_str().unwrap());
+        assert!(
+            r.is_err(),
+            "an unreadable-but-present path must refuse, not begin an empty store"
+        );
+        assert!(r.err().unwrap().contains("refusing"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn try_open_reports_each_failure_by_its_actual_cause() {
+        let key = b"correct horse battery staple";
+        // A real store sealed under `key`, holding one memory.
+        let mut mem = Mnema::new(HashEmbedder::new(DIMS));
+        mem.remember(EgressTier::Open, "the one memory");
+        let blob = mem.seal(key).unwrap();
+
+        // Round-trips under the right key.
+        let opened = try_open("s", &blob, key).expect("the right key opens the store");
+        assert_eq!(opened.len(), 1);
+
+        // A wrong key is reported as the key/corruption case, with the rekey-resume hint.
+        let wrong = try_open("s", &blob, b"wrong key").err().unwrap();
+        assert!(wrong.contains("wrong key or corrupt"), "{wrong}");
+
+        // A store sealed by a different-width embedder is a MIGRATION case, not "wrong key" —
+        // misreporting it would send the user to rekey, which cannot fix it.
+        let mut other = Mnema::new(HashEmbedder::new(64));
+        other.remember(EgressTier::Open, "written at width 64");
+        let other_blob = other.seal(key).unwrap();
+        let width = try_open("s", &other_blob, key).err().unwrap();
+        assert!(width.contains("different embedder"), "{width}");
+        assert!(width.contains("--migrate"), "{width}");
+
+        // An unknown format-version byte is an UPGRADE case, again not "wrong key".
+        let mut newer = blob.clone();
+        newer[0] = 0xFE;
+        let ver = try_open("s", &newer, key).err().unwrap();
+        assert!(ver.contains("newer than this mnema"), "{ver}");
     }
 }

@@ -1,0 +1,5 @@
+# noha-core behavioral mutation-coverage baseline — the ratchet floor (may only shrink)
+src/bin/mnema-server.rs	820	!x→x	.filter(|d| !d.as_os_str().is_empty())
+src/keyfile.rs	107	true→false	.write(true)
+src/keyfile.rs	108	true→false	.create_new(true)
+src/keyfile.rs	175	!x→x	if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty())

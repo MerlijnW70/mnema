@@ -27,6 +27,10 @@ pub enum KeyError {
     Entropy,
     /// Persisting the sidecar keyfile failed.
     WriteFailed(PathBuf, std::io::Error),
+    /// The sidecar keyfile (or the store's own metadata) could not be READ — a permission or
+    /// sharing violation, not absence. Generating a fresh key here would atomically rename it
+    /// over a keyfile that still exists, destroying the only key to the store; refuse instead.
+    ReadFailed(PathBuf, std::io::Error),
 }
 
 impl std::fmt::Display for KeyError {
@@ -47,6 +51,14 @@ impl std::fmt::Display for KeyError {
             KeyError::Entropy => write!(f, "system entropy unavailable while generating a key"),
             KeyError::WriteFailed(p, e) => {
                 write!(f, "could not write keyfile {}: {e}", p.display())
+            }
+            KeyError::ReadFailed(p, e) => {
+                write!(
+                    f,
+                    "could not read {}: {e} — refusing to generate a fresh key while the \
+                     existing one may still be there. Resolve the I/O error and retry.",
+                    p.display()
+                )
             }
         }
     }
@@ -98,14 +110,62 @@ fn open_private_new(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-#[cfg(not(unix))]
+/// On Windows there is no mode bit, but there ARE ACLs — and a store outside the user profile
+/// (a shared folder, C:\Temp) hands the keyfile down whatever read access that directory grants,
+/// including BUILTIN\Users on many non-profile paths: any local user could read the raw store
+/// key and decrypt the store offline. So: create the file, then cut its ACL down to owner-only
+/// via `icacls` (strip inheritance, grant only the file's owner — `*S-1-3-4` is the OWNER RIGHTS
+/// SID, locale-independent) **before any key byte is written**. A failed restriction fails the
+/// open — an unprotected keyfile must never be created silently.
+#[cfg(windows)]
 fn open_private_new(path: &Path) -> std::io::Result<std::fs::File> {
+    open_private_new_with(path, restrict_to_owner)
+}
+
+/// The `icacls` invocation itself, split out so tests can drive the failure branch of
+/// [`open_private_new_with`] with a deterministic failing restrictor (a real `icacls` failure
+/// cannot be provoked hermetically on a file we just created).
+#[cfg(windows)]
+fn restrict_to_owner(path: &Path) -> std::io::Result<std::process::ExitStatus> {
+    std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", "*S-1-3-4:F"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+}
+
+#[cfg(windows)]
+fn open_private_new_with(
+    path: &Path,
+    restrict: fn(&Path) -> std::io::Result<std::process::ExitStatus>,
+) -> std::io::Result<std::fs::File> {
     let _ = std::fs::remove_file(path);
-    std::fs::OpenOptions::new()
+    let f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path)
+        .open(path)?;
+    let status = restrict(path)?;
+    if !status.success() {
+        drop(f);
+        let _ = std::fs::remove_file(path);
+        return Err(std::io::Error::other(
+            "icacls could not restrict the keyfile to owner-only",
+        ));
+    }
+    Ok(f)
 }
+
+// No third platform: `unix` (Linux/macOS/BSD, `0600`) and `windows` (icacls owner-only ACL) are
+// the entire support matrix for the `secure` feature. Rather than carry an unprivileged fallback
+// that would silently create a world-readable keyfile — and that no test on any supported target
+// could ever exercise (so a mutation of it can never be killed) — refuse to build. A new target
+// must add a real owner-only `open_private_new` here.
+#[cfg(not(any(unix, windows)))]
+compile_error!(
+    "mnema's `secure` feature supports only unix and windows targets: the keyfile holding the \
+     raw store key must be created owner-only, and no such mechanism is defined for this target."
+);
 
 /// fsync the directory holding `path` so a rename's directory entry is durable (POSIX). Windows
 /// has no directory handle to fsync here; the temp fsync + atomic replace already avoid a torn
@@ -159,8 +219,21 @@ pub fn resolve_key(store: &Path) -> Result<Vec<u8>, KeyError> {
     match std::fs::read(&keyfile) {
         Ok(b) if b.len() == 32 => Ok(b),
         Ok(_) => Err(KeyError::MalformedKeyfile(keyfile)),
-        Err(_) if store.exists() => Err(KeyError::ExistingStoreNoKeyfile),
-        Err(_) => generate_keyfile(&keyfile),
+        // ONLY a genuinely absent keyfile may fall through toward generation. Any other read
+        // error (permissions, a sharing violation, transient I/O) means the keyfile may still
+        // exist — and generate_keyfile would atomically rename a FRESH key over it, destroying
+        // the only key to the store. Fail closed instead.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // The store-existence probe must fail closed the same way: `Path::exists()` reads a
+            // stat *error* as "no store", which would invent a fresh key for a store that does
+            // exist — sealing future writes under a key its data was never written with.
+            match store.try_exists() {
+                Ok(true) => Err(KeyError::ExistingStoreNoKeyfile),
+                Ok(false) => generate_keyfile(&keyfile),
+                Err(e) => Err(KeyError::ReadFailed(store.to_path_buf(), e)),
+            }
+        }
+        Err(e) => Err(KeyError::ReadFailed(keyfile, e)),
     }
 }
 
@@ -272,5 +345,98 @@ mod tests {
             resolve_key(&ts.0),
             Err(KeyError::MalformedKeyfile(_))
         ));
+    }
+
+    #[test]
+    fn resolve_key_fails_closed_when_the_keyfile_is_unreadable_rather_than_regenerating() {
+        if !env_key_unset() {
+            return;
+        }
+        // The key-destruction trap: a keyfile that exists but cannot be READ (permissions, a
+        // sharing violation) must never be treated like an absent one — generation would rename
+        // a FRESH key over it and the store would be locked away forever. A directory at the
+        // keyfile path is the portable "read fails, but NOT with NotFound" stand-in.
+        let ts = TempStore::new("unreadable");
+        let kf = keyfile_path(&ts.0);
+        std::fs::create_dir_all(&kf).unwrap();
+        let r = resolve_key(&ts.0);
+        assert!(
+            matches!(r, Err(KeyError::ReadFailed(_, _))),
+            "an unreadable keyfile must refuse, not regenerate: {r:?}"
+        );
+        assert!(kf.is_dir(), "nothing may be written over the keyfile path");
+        let _ = std::fs::remove_dir_all(&kf);
+    }
+
+    #[test]
+    fn generate_keyfile_creates_missing_parent_directories() {
+        // A keyfile path inside a directory that does not exist yet must be created, not fail:
+        // the non-empty parent has to survive the `.filter(|d| !d.as_os_str().is_empty())`
+        // guard and reach `create_dir_all`.
+        let mut root = std::env::temp_dir();
+        root.push(format!("mnema_keyfile_test_nested_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let kf = root.join("a").join("b").join("store.key");
+        let k = generate_keyfile(&kf).unwrap();
+        assert_eq!(
+            std::fs::read(&kf).unwrap(),
+            k,
+            "the key must land inside the freshly created parent directories"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn open_private_new_fails_and_removes_the_file_when_restriction_fails() {
+        // The unprotected-keyfile trap: if the ACL restriction fails, the open must FAIL and the
+        // file must be GONE — never a silently world-readable keyfile. Driven through a
+        // deterministic failing restrictor; the success side is asserted right after.
+        fn failing(_: &Path) -> std::io::Result<std::process::ExitStatus> {
+            std::process::Command::new("cmd")
+                .args(["/C", "exit", "1"])
+                .status()
+        }
+        fn passing(_: &Path) -> std::io::Result<std::process::ExitStatus> {
+            std::process::Command::new("cmd")
+                .args(["/C", "exit", "0"])
+                .status()
+        }
+        let ts = TempStore::new("winrestrict");
+        let kf = keyfile_path(&ts.0);
+        let r = open_private_new_with(&kf, failing);
+        assert!(r.is_err(), "a failed ACL restriction must fail the open");
+        assert!(
+            !kf.exists(),
+            "an unprotected keyfile must never be left behind"
+        );
+        let f = open_private_new_with(&kf, passing).expect("a successful restriction opens");
+        drop(f);
+        assert!(kf.exists(), "the successfully restricted file must remain");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generate_keyfile_is_acl_restricted_to_the_owner_on_windows() {
+        // The Windows mirror of the unix 0600 test: the keyfile's ACL must carry NO inherited
+        // ACEs (no "(I)" markers — those are what hand BUILTIN\Users read access on non-profile
+        // paths) and exactly ONE explicit ACE, the owner-only grant.
+        let ts = TempStore::new("winacl");
+        let kf = keyfile_path(&ts.0);
+        generate_keyfile(&kf).unwrap();
+        let out = std::process::Command::new("icacls")
+            .arg(&kf)
+            .output()
+            .expect("icacls is a Windows system binary");
+        let listing = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            !listing.contains("(I)"),
+            "the keyfile must not inherit directory ACEs: {listing}"
+        );
+        assert_eq!(
+            listing.matches(":(").count(),
+            1,
+            "exactly one explicit owner-only ACE: {listing}"
+        );
     }
 }

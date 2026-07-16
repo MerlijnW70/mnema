@@ -76,6 +76,11 @@ pub enum ConnectError {
     BadResponse,
     /// The endpoint returned a zero-width embedding.
     EmptyEmbedding,
+    /// `$MNEMA_EMBED_URL` points off this machine and `$MNEMA_EMBED_ALLOW_REMOTE` is not an
+    /// explicit affirmative. Every `remember`/`recall` sends its FULL text — including
+    /// Private-tier content — to the embeddings endpoint in plaintext HTTP, so an env var
+    /// silently redirecting that stream off-device would breach "never leaks to the cloud".
+    NonLocalUrl(String),
 }
 
 impl std::fmt::Display for ConnectError {
@@ -86,6 +91,14 @@ impl std::fmt::Display for ConnectError {
                 write!(f, "embeddings response had no recognizable embedding array")
             }
             ConnectError::EmptyEmbedding => write!(f, "embeddings endpoint returned width 0"),
+            ConnectError::NonLocalUrl(url) => write!(
+                f,
+                "$MNEMA_EMBED_URL={url} is not a loopback address. Memory text (including \
+                 private-tier content) is sent to the embeddings endpoint in plaintext, so a \
+                 non-local endpoint must be opted into explicitly: set \
+                 MNEMA_EMBED_ALLOW_REMOTE=1 if you really run your embedding server on \
+                 another machine you trust."
+            ),
         }
     }
 }
@@ -135,16 +148,70 @@ impl HttpEmbedder {
     /// Connect using `$MNEMA_EMBED_URL` (default [`DEFAULT_URL`]), `$MNEMA_EMBED_MODEL` (default
     /// [`DEFAULT_MODEL`]), and `$MNEMA_EMBED_API` (`ollama`/`openai`; auto-detected from a `/v1/` URL
     /// when unset or unrecognized).
+    ///
+    /// **Loopback-only by default.** Every embedding request carries the memory's full text —
+    /// Private tier included — as plaintext HTTP, so an env var quietly pointing off-machine
+    /// would be a silent egress channel. A non-loopback `$MNEMA_EMBED_URL` is refused unless
+    /// `$MNEMA_EMBED_ALLOW_REMOTE` is an explicit affirmative (`1`/`true`/`yes`/`on`). Code
+    /// calling [`connect`](Self::connect) directly makes that choice explicitly and is not
+    /// gated.
     pub fn from_env() -> Result<Self, ConnectError> {
-        let url = std::env::var("MNEMA_EMBED_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
-        let model =
-            std::env::var("MNEMA_EMBED_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-        let api = std::env::var("MNEMA_EMBED_API")
-            .ok()
-            .and_then(|s| Api::parse(&s))
-            .unwrap_or_else(|| Api::guess_from_url(&url));
+        let (url, model, api) = resolve_env_config(
+            std::env::var("MNEMA_EMBED_URL").ok(),
+            std::env::var("MNEMA_EMBED_ALLOW_REMOTE").ok(),
+            std::env::var("MNEMA_EMBED_MODEL").ok(),
+            std::env::var("MNEMA_EMBED_API").ok(),
+        )?;
         Self::connect(url, model, api)
     }
+}
+
+/// Resolve the [`HttpEmbedder::from_env`] configuration from the raw env-var values, pure for
+/// testability: apply the defaults, enforce the loopback egress gate, and pick the API.
+/// `from_env` is a thin shell that reads `$MNEMA_EMBED_URL` / `$MNEMA_EMBED_ALLOW_REMOTE` /
+/// `$MNEMA_EMBED_MODEL` / `$MNEMA_EMBED_API` and delegates here.
+fn resolve_env_config(
+    url: Option<String>,
+    allow_remote: Option<String>,
+    model: Option<String>,
+    api: Option<String>,
+) -> Result<(String, String, Api), ConnectError> {
+    let url = url.unwrap_or_else(|| DEFAULT_URL.to_string());
+    if !remote_url_permitted(&url, allow_remote.as_deref()) {
+        return Err(ConnectError::NonLocalUrl(url));
+    }
+    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let api = api
+        .and_then(|s| Api::parse(&s))
+        .unwrap_or_else(|| Api::guess_from_url(&url));
+    Ok((url, model, api))
+}
+
+/// Whether `url` targets this machine: a `localhost`, `127.x.y.z`, or `[::1]` host. Only plain
+/// `http://` is compiled in, so no other scheme needs parsing.
+fn is_loopback_url(url: &str) -> bool {
+    let rest = url.strip_prefix("http://").unwrap_or(url);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Drop any userinfo, then the port — IPv6 hosts are bracketed, so `[::1]:8080` splits on `]`.
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.split(':').next().unwrap_or(""),
+    };
+    let h = host.to_ascii_lowercase();
+    h == "localhost" || h == "::1" || h.starts_with("127.")
+}
+
+/// The `from_env` egress gate, pure for testability: a loopback `url` is always permitted; a
+/// non-loopback one only when `allow` (the `$MNEMA_EMBED_ALLOW_REMOTE` value) is an explicit
+/// affirmative. Fail-closed like every switch guarding the privacy posture: `0`, `false`, an
+/// empty string, or anything unrecognized does NOT open the wall.
+fn remote_url_permitted(url: &str, allow: Option<&str>) -> bool {
+    is_loopback_url(url)
+        || matches!(
+            allow.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+            Some("1" | "true" | "yes" | "on")
+        )
 }
 
 /// The request body for `api`.
@@ -232,6 +299,129 @@ impl Embedder for HttpEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+
+    /// Serve `bodies.len()` sequential HTTP requests on a fresh loopback listener, answering the
+    /// i-th request with the i-th canned JSON body, then exit. Returns the endpoint URL and the
+    /// server thread's join handle. Every response says `Connection: close`, so the client opens a
+    /// new connection per request and the accept loop stays strictly sequential. The read side is
+    /// timeout-guarded so a wedged client cannot hang the suite.
+    fn spawn_canned_server(bodies: Vec<String>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
+        let port = listener.local_addr().expect("local addr").port();
+        let handle = std::thread::spawn(move || {
+            for body in bodies {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                // Read the full request: headers, then exactly Content-Length body bytes.
+                let mut buf = Vec::new();
+                let mut tmp = [0_u8; 1024];
+                let mut header_end: Option<usize> = None;
+                let mut content_len = 0_usize;
+                loop {
+                    match stream.read(&mut tmp) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                    }
+                    if header_end.is_none()
+                        && let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n")
+                    {
+                        header_end = Some(pos + 4);
+                        for line in String::from_utf8_lossy(&buf[..pos]).lines() {
+                            let lower = line.to_ascii_lowercase();
+                            if let Some(v) = lower.strip_prefix("content-length:") {
+                                content_len = v.trim().parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    if let Some(end) = header_end
+                        && buf.len() >= end + content_len
+                    {
+                        break;
+                    }
+                }
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        (format!("http://127.0.0.1:{port}/api/embeddings"), handle)
+    }
+
+    #[test]
+    fn connect_learns_the_width_from_a_nonempty_probe() {
+        let (url, server) = spawn_canned_server(vec![r#"{"embedding":[1.0,2.0,3.0]}"#.into()]);
+        let embedder = HttpEmbedder::connect(url.as_str(), "m", Api::Ollama)
+            .expect("a non-empty probe embedding must connect");
+        assert_eq!(embedder.dims(), 3);
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn connect_refuses_a_zero_width_probe() {
+        let (url, server) = spawn_canned_server(vec![r#"{"embedding":[]}"#.into()]);
+        match HttpEmbedder::connect(url.as_str(), "m", Api::Ollama) {
+            Err(ConnectError::EmptyEmbedding) => {}
+            Err(e) => panic!("expected EmptyEmbedding, got {e:?}"),
+            Ok(_) => panic!("a width-0 embedding must not connect"),
+        }
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn embed_returns_the_vector_on_a_width_match_and_zeros_on_a_mismatch() {
+        let (url, server) = spawn_canned_server(vec![
+            r#"{"embedding":[1.0,2.0,3.0]}"#.into(), // connect probe -> dims = 3
+            r#"{"embedding":[0.5,1.5,2.5]}"#.into(), // matching width -> passed through
+            r#"{"embedding":[9.0,9.0]}"#.into(),     // wrong width -> zero vector of dims
+        ]);
+        let embedder = HttpEmbedder::connect(url.as_str(), "m", Api::Ollama).expect("connect");
+        assert_eq!(embedder.embed("a"), vec![0.5_f32, 1.5, 2.5]);
+        assert_eq!(embedder.embed("b"), vec![0.0_f32, 0.0, 0.0]);
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn env_config_defaults_gates_remote_urls_and_picks_the_api() {
+        // No env vars: the loopback default is permitted, model defaults, API guessed as Ollama.
+        let (url, model, api) =
+            resolve_env_config(None, None, None, None).expect("defaults are loopback");
+        assert_eq!(url, DEFAULT_URL);
+        assert_eq!(model, DEFAULT_MODEL);
+        assert_eq!(api, Api::Ollama);
+
+        // A remote URL without the explicit opt-in is refused (the egress wall)...
+        let remote = "http://192.168.1.20:11434/api/embeddings";
+        match resolve_env_config(Some(remote.into()), None, None, None) {
+            Err(ConnectError::NonLocalUrl(u)) => assert_eq!(u, remote),
+            other => panic!("a remote URL without opt-in must be refused, got {other:?}"),
+        }
+        // ...and passed through with an explicit affirmative.
+        let (url, model, api) = resolve_env_config(
+            Some(remote.into()),
+            Some("1".into()),
+            Some("mm".into()),
+            None,
+        )
+        .expect("explicit opt-in");
+        assert_eq!(url, remote);
+        assert_eq!(model, "mm");
+        assert_eq!(api, Api::Ollama);
+
+        // The API comes from the selector when recognized, else is guessed from the URL.
+        let v1 = "http://127.0.0.1:8080/v1/embeddings";
+        let (_, _, api) = resolve_env_config(Some(v1.into()), None, None, None).expect("loopback");
+        assert_eq!(api, Api::OpenAi);
+        let (_, _, api) = resolve_env_config(Some(v1.into()), None, None, Some("ollama".into()))
+            .expect("loopback");
+        assert_eq!(api, Api::Ollama);
+    }
 
     #[test]
     fn request_body_matches_each_api_shape() {
@@ -268,6 +458,58 @@ mod tests {
             None
         );
         assert_eq!(parse_embedding(&serde_json::json!({ "data": [] })), None);
+    }
+
+    #[test]
+    fn loopback_detection_covers_the_local_spellings_and_rejects_the_rest() {
+        for local in [
+            "http://localhost:11434/api/embeddings",
+            "http://LOCALHOST/v1/embeddings",
+            "http://127.0.0.1:8080/v1/embeddings",
+            "http://127.5.5.5/api/embeddings",
+            "http://[::1]:11434/api/embeddings",
+        ] {
+            assert!(is_loopback_url(local), "{local} is this machine");
+        }
+        for remote in [
+            "http://192.168.1.20:11434/api/embeddings",
+            "http://embed.example.com/v1/embeddings",
+            "http://10.0.0.1/api/embeddings",
+            "http://[fe80::1]:11434/api/embeddings",
+            // Tricks: loopback as userinfo/port text, not as the host.
+            "http://evil.example.com:11434/api?host=localhost",
+            "http://localhost.example.com/api/embeddings",
+        ] {
+            assert!(!is_loopback_url(remote), "{remote} is NOT this machine");
+        }
+    }
+
+    #[test]
+    fn a_remote_embed_url_needs_an_explicit_affirmative_opt_in() {
+        let remote = "http://192.168.1.20:11434/api/embeddings";
+        // Loopback needs no opt-in.
+        assert!(remote_url_permitted(DEFAULT_URL, None));
+        // Remote without the env var, or with a falsy/unrecognized value, is REFUSED —
+        // private-tier text would flow there in plaintext.
+        for no in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("off"),
+            Some("remote"),
+        ] {
+            assert!(
+                !remote_url_permitted(remote, no),
+                "{no:?} must not open the egress wall"
+            );
+        }
+        for yes in [Some("1"), Some("true"), Some("YES"), Some(" on ")] {
+            assert!(
+                remote_url_permitted(remote, yes),
+                "{yes:?} is an explicit opt-in"
+            );
+        }
     }
 
     #[test]
