@@ -32,13 +32,11 @@
 locomo10.json
 data/locomo10.json
 
-# The local mutation-coverage gate's config, baseline, and binaries — a per-machine dev
-# install, not source. Kept on disk to run the gate locally; never published or committed.
-.noha/
-noha.yaml
+# Noha — the mutation-coverage trust layer — is COMMITTED, CI-enforced infrastructure (see
+# NOHA.md and the `noha` job in .github/workflows/ci.yml). The config (`noha.yaml` in each crate)
+# and the ratchet baseline (`.noha/baseline.tsv`, `.noha/INTEGRITY_PROMPT.md`) are source and are
+# tracked. Only the per-machine TIA scan cache is regenerable and stays out of version control.
+.noha/tia.tsv
 
 # Internal design docs (ADRs, design proposal) — kept local, not published.
 docs/
-
-# LoCoMo dataset (third-party, not vendored — see benches/locomo.rs header)
-locomo10.json

@@ -107,6 +107,13 @@ impl VectorIndex {
             return Vec::new();
         }
         let qn = norm(query);
+        // A zero-magnitude query has no direction: every cosine is 0.0, so "top-k" would be k
+        // arbitrary ids whose tie-broken order then VOTES in retrieval fusion — a degraded
+        // embedder (the documented zero-vector fallback) would outvote real lexical matches
+        // with noise. No signal in, no hits out.
+        if qn == 0.0 {
+            return Vec::new();
+        }
         let mut scored: Vec<Scored> = self
             .entries
             .iter()
@@ -205,6 +212,11 @@ impl IvfIndex {
     /// nothing.
     pub fn search(&self, query: &[f32], k: usize, probe: usize) -> Vec<Scored> {
         if query.len() != self.dims {
+            return Vec::new();
+        }
+        // No direction, no hits — mirrors `VectorIndex::search` (see there): a zero-magnitude
+        // query must not emit k arbitrary tie-broken ids as if they were dense matches.
+        if norm(query) == 0.0 {
             return Vec::new();
         }
         // Rank anchors by similarity to the query; take the `probe` closest.
@@ -381,6 +393,23 @@ mod tests {
         let s = cosine(&[0.0, 0.0], &[1.0, 1.0]);
         assert!(approx(s, 0.0));
         assert!(!s.is_nan());
+    }
+
+    #[test]
+    fn a_zero_magnitude_query_returns_no_hits_from_either_index() {
+        // A degraded embedder's documented fallback is the zero vector. It has no direction, so
+        // every cosine ties at 0.0 — "top-k" would be k arbitrary ids that then vote as dense
+        // matches in retrieval fusion, outranking real lexical hits with pure noise. No signal
+        // in, no hits out — from the exact index and the IVF index alike.
+        let mut idx = VectorIndex::new(2);
+        idx.insert(1, vec![1.0, 0.0]).unwrap();
+        idx.insert(2, vec![0.0, 1.0]).unwrap();
+        assert!(idx.search(&[0.0, 0.0], 2).is_empty());
+
+        let mut ivf = IvfIndex::new(2, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        ivf.insert(1, vec![1.0, 0.0]).unwrap();
+        ivf.insert(2, vec![0.0, 1.0]).unwrap();
+        assert!(ivf.search(&[0.0, 0.0], 2, 2).is_empty());
     }
 
     #[test]

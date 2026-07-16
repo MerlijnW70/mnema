@@ -100,6 +100,30 @@ name = "mnema-server"
 path = "src/bin/mnema-server.rs"
 required-features = ["mcp"]
 
+# Spawned-process proof of $MNEMA_KEY handling (set / empty) in key resolution — env-dependent
+# behavior can't be tested in-process (set_var is unsafe in edition 2024; the crate forbids unsafe).
+[[test]]
+name = "keyfile_env"
+path = "tests/keyfile_env.rs"
+required-features = ["secure"]
+
+# Spawned-process proof of the mnema CLI: store locking (directory creation, contention refusal),
+# rekey (existence check, keyfile resume, malformed refusal), reinforce, and forget-fact. These
+# paths run through main()/die() which exit the process, so they are only observable end-to-end.
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+required-features = ["secure"]
+
+# Spawned-process proof of the mnema-server binary: config resolution (--path/$MNEMA_PATH
+# precedence, the --local/$MNEMA_LOCAL egress switches, --migrate), the store lock refusing a
+# second server, and refusal to overwrite a corrupt store. These paths run through main() and
+# std::process::exit, so they are only observable end-to-end over piped stdio JSON-RPC.
+[[test]]
+name = "server"
+path = "tests/server.rs"
+required-features = ["mcp"]
+
 # A live, self-verifying tour of the memory layer.
 [[example]]
 name = "memory_demo"
