@@ -106,10 +106,19 @@ jobs:
       # verification: a trust layer verifies its own binary. Bump NOHA_VERSION deliberately.
       - name: install noha
         env:
-          GH_TOKEN: ${{ secrets.NOHA_INSTALL_TOKEN }}
+          # Read the raw secret into a plain var, then strip any whitespace/newline before use:
+          # a trailing newline in the stored secret makes `Authorization: Bearer <pat>\n` and GitHub
+          # answers 401 Bad credentials even for a perfectly valid token. PATs contain no
+          # whitespace, so trimming only ever removes storage pollution.
+          NOHA_INSTALL_TOKEN: ${{ secrets.NOHA_INSTALL_TOKEN }}
           NOHA_VERSION: v0.1.4
           NOHA_TARGET: x86_64-unknown-linux-musl
         run: |
+          GH_TOKEN="$(printf '%s' "$NOHA_INSTALL_TOKEN" | tr -d '[:space:]')"
+          export GH_TOKEN
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::NOHA_INSTALL_TOKEN secret is empty — set a fine-grained PAT with Contents:read on MerlijnW70/emerge"; exit 1
+          fi
           asset="noha-${NOHA_TARGET}.tar.gz"
           tmp="$(mktemp -d)"
           gh release download "$NOHA_VERSION" --repo MerlijnW70/emerge \
