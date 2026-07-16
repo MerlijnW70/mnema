@@ -100,12 +100,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.96"
-      # Install the prebuilt, checksum-verified noha binaries (no toolchain build). Pin a version
-      # to keep the gate reproducible; bump deliberately.
+      # Install the prebuilt noha binary from the (private) emerge release. Needs a repo secret
+      # NOHA_INSTALL_TOKEN — a fine-grained PAT with read access to MerlijnW70/emerge (Contents:
+      # read) — since a public install.sh curl 404s on a private repo. Pinned version + SHA256
+      # verification: a trust layer verifies its own binary. Bump NOHA_VERSION deliberately.
       - name: install noha
+        env:
+          GH_TOKEN: ${{ secrets.NOHA_INSTALL_TOKEN }}
+          NOHA_VERSION: v0.1.4
+          NOHA_TARGET: x86_64-unknown-linux-musl
         run: |
-          curl -fsSL https://raw.githubusercontent.com/MerlijnW70/emerge/master/install.sh | sh -s -- v0.1.4
+          asset="noha-${NOHA_TARGET}.tar.gz"
+          tmp="$(mktemp -d)"
+          gh release download "$NOHA_VERSION" --repo MerlijnW70/emerge \
+            --pattern "$asset" --pattern SHA256SUMS --dir "$tmp"
+          ( cd "$tmp" && grep " $asset\$" SHA256SUMS | sha256sum -c - ) \
+            || { echo "::error::noha checksum mismatch — refusing to run an unverified gate"; exit 1; }
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          mkdir -p "$HOME/.local/bin"
+          cp "$tmp/noha-${NOHA_TARGET}/noha" "$HOME/.local/bin/noha"
+          chmod +x "$HOME/.local/bin/noha"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/noha" version
       # The zero-dependency leaf certification: boundary + import constraints + fail-closed + surface.
       - name: noha gate (mnema-core leaf)
         working-directory: mnema-core
