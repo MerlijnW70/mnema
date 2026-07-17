@@ -5,7 +5,7 @@
 //! This is the **umbrella** crate. Its zero-dependency heart lives in the separate [`mnema_core`]
 //! crate — the egress-filter privacy invariant (ADR-0021), the memory model, and the pure-logic
 //! stores (`semantic`, `working`, `vector`, `embed`, `retrieval`). That crate is a strictly
-//! zero-dependency, `unsafe`-free leaf, certified as such by `internal-tool gate` on every run; keeping it a
+//! zero-dependency, `unsafe`-free leaf, certified as such by CI on every run; keeping it a
 //! separate crate is what makes "the core takes no dependencies" a *mechanically enforced* fact rather
 //! than a hope (ADR-0020). Everything that legitimately needs a dependency — encryption at rest, a real
 //! embedder, JSON for the MCP server — is opt-in and lives here, one layer up.

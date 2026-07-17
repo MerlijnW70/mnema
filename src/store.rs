@@ -512,17 +512,17 @@ pub(crate) fn take_u8(buf: &[u8], off: usize) -> Result<(u8, usize), StoreError>
 
 pub(crate) fn take_u32(buf: &[u8], off: usize) -> Result<(u32, usize), StoreError> {
     let (s, next) = take_slice(buf, off, 4)?;
-    Ok((u32::from_le_bytes(s.try_into().unwrap()), next)) // internal-tool: take_slice just returned exactly 4 bytes — infallible
+    Ok((u32::from_le_bytes(s.try_into().unwrap()), next)) // invariant: take_slice just returned exactly 4 bytes — infallible
 }
 
 pub(crate) fn take_u64(buf: &[u8], off: usize) -> Result<(u64, usize), StoreError> {
     let (s, next) = take_slice(buf, off, 8)?;
-    Ok((u64::from_le_bytes(s.try_into().unwrap()), next)) // internal-tool: take_slice just returned exactly 8 bytes — infallible
+    Ok((u64::from_le_bytes(s.try_into().unwrap()), next)) // invariant: take_slice just returned exactly 8 bytes — infallible
 }
 
 pub(crate) fn take_f32(buf: &[u8], off: usize) -> Result<(f32, usize), StoreError> {
     let (s, next) = take_slice(buf, off, 4)?;
-    Ok((f32::from_le_bytes(s.try_into().unwrap()), next)) // internal-tool: take_slice just returned exactly 4 bytes — infallible
+    Ok((f32::from_le_bytes(s.try_into().unwrap()), next)) // invariant: take_slice just returned exactly 4 bytes — infallible
 }
 
 /// Read a length-prefixed byte string at `off`: a `u64` LE length, then its bytes. The length is

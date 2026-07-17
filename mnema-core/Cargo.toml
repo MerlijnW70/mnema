@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 keywords = ["memory", "agent", "llm", "local-first", "zero-dependency"]
 categories = ["data-structures"]
 
-# The whole point of this crate: it is a strictly zero-dependency, unsafe-free Rust leaf. `internal-tool gate`
-# certifies exactly that on every run — no `[dependencies]` may ever appear here. Anything that needs a
-# dependency (encryption, embeddings, JSON) lives in the umbrella `mnema` crate, one layer up.
+# The whole point of this crate: it is a strictly zero-dependency, unsafe-free Rust leaf — no
+# `[dependencies]` may ever appear here, and CI enforces it. Anything that needs a dependency
+# (encryption, embeddings, JSON) lives in the umbrella `mnema` crate, one layer up.
 [dependencies]

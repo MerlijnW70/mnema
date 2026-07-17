@@ -1,4 +1,4 @@
-# A two-crate workspace: `mnema-core` is the strictly zero-dependency, `internal-tool gate`-certified leaf;
+# A two-crate workspace: `mnema-core` is the strictly zero-dependency leaf;
 # this umbrella `mnema` package re-exports it and adds the opt-in, dependency-carrying features.
 [workspace]
 members = ["mnema-core"]
