@@ -130,6 +130,14 @@ jobs:
             echo "::warning::HOMEBREW_TAP_TOKEN is not set - skipping the Homebrew tap bump (the formula stays at its current version)"
             exit 0
           fi
+          # Strip any whitespace/newlines picked up when the secret was pasted - a polluted
+          # value splits the clone URL and git fails with "Bad hostname". PATs contain no
+          # whitespace, so trimming only ever removes storage pollution.
+          TAP_TOKEN="$(printf '%s' "$TAP_TOKEN" | tr -d '[:space:]')"
+          if ! git ls-remote "https://x-access-token:$TAP_TOKEN@github.com/MerlijnW70/homebrew-mnema.git" >/dev/null 2>&1; then
+            echo "::error::HOMEBREW_TAP_TOKEN is rejected by GitHub - re-set it with: gh secret set HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents read/write on MerlijnW70/homebrew-mnema)"
+            exit 1
+          fi
           ver="${TAG#v}"
           tmp="$(mktemp -d)"
           curl -fsSL "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS" -o "$tmp/SHA256SUMS"
