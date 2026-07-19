@@ -703,7 +703,11 @@ fn encode_vectors(index: &VectorIndex) -> Vec<u8> {
     buf.extend_from_slice(&(entries.len() as u32).to_le_bytes());
     for (id, v) in entries {
         buf.extend_from_slice(&id.to_le_bytes());
-        let mut bytes = Vec::with_capacity(v.len() * 4);
+        // No `with_capacity` sizing hint here on purpose: its arithmetic is a mutation site no
+        // test can distinguish (capacity is invisible in the result), so the prober reports it
+        // as an unkillable survivor. A few reallocs per encoded vector are not worth an
+        // unprovable branch in the ratchet.
+        let mut bytes = Vec::new();
         for &x in v {
             bytes.extend_from_slice(&x.to_le_bytes());
         }
@@ -1085,6 +1089,50 @@ mod tests {
         e.remember_fact("alice", "diet", "vegetarian"); // superseded ↓
         e.remember_fact("alice", "diet", "omnivore"); // live
         e
+    }
+
+    #[test]
+    fn restore_index_re_embeds_a_legacy_store_with_no_vector_section() {
+        // A store sealed before vectors were persisted ends exactly where the vector section
+        // would begin — `off == plain.len()`. The strict `<` takes the None (re-embed) branch;
+        // the off-by-one `<=` would read past the end and fail the OPEN of every legacy store
+        // with Truncated. This is the backward-compatibility boundary itself.
+        let mut e = Mnema::new(VowelEmbedder);
+        e.remember(EgressTier::Open, "the cat sat");
+        let plain = b"legacy-episodic-bytes";
+        let index =
+            Mnema::<VowelEmbedder>::restore_index(plain, plain.len(), &e.episodic, &VowelEmbedder)
+                .expect("a legacy store must open via the re-embed path, not fail Truncated");
+        assert_eq!(index.entries().count(), 1, "the one memory was re-embedded");
+    }
+
+    #[test]
+    fn decode_vectors_rejects_a_vector_whose_bytes_are_not_a_multiple_of_four() {
+        // count=1, id=7, then a length-framed FIVE-byte payload: 1.25 floats is not a vector.
+        // Without the guard, `chunks_exact(4)` silently DROPS the trailing byte — a corrupt
+        // store would shorten a vector instead of refusing.
+        let mut bad = Vec::new();
+        bad.extend_from_slice(&1u32.to_le_bytes());
+        bad.extend_from_slice(&7u64.to_le_bytes());
+        put_bytes(&mut bad, &[0u8; 5]);
+        assert!(
+            matches!(decode_vectors(&bad), Err(StoreError::Truncated)),
+            "a non-multiple-of-4 vector payload must refuse, not shorten"
+        );
+        // the positive twin: exactly two floats round-trip, so the guard does not over-reject
+        let mut ok = Vec::new();
+        ok.extend_from_slice(&1u32.to_le_bytes());
+        ok.extend_from_slice(&7u64.to_le_bytes());
+        let two_floats: Vec<u8> = [1.0f32, 2.0f32]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        put_bytes(&mut ok, &two_floats);
+        assert_eq!(
+            decode_vectors(&ok).unwrap(),
+            vec![(7, vec![1.0f32, 2.0])],
+            "a well-formed payload decodes exactly"
+        );
     }
 
     #[test]
