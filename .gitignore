@@ -34,3 +34,12 @@ data/locomo10.json
 
 # Internal design docs (ADRs, design proposal) — kept local, not published.
 docs/
+
+# The mutation ratchet TRAVELS with the repo: noha.yaml (config) and .noha/baseline.tsv
+# (the floor) are committed — a floor that does not travel is not a floor. Only the
+# machine-local parts stay out: the vendored binaries, the TIA cache (zero authority,
+# pure speed), and cargo-install bookkeeping.
+**/.noha/bin/
+**/.noha/tia.tsv
+**/.noha/.crates.toml
+**/.noha/.crates2.json

@@ -1,0 +1,36 @@
+# noha.yaml — the zero-dependency leaf's own gate config (`noha gate` runs HERE).
+# A tiny YAML subset: scalars, comments, and one level of `- ` lists.
+#
+# mnema-core is the strictly zero-dependency, unsafe-free crate carrying the egress-privacy
+# invariant and all pure logic. `noha gate` in this directory certifies the boundary
+# (no non-std imports, zero deps in Cargo.toml); the constraints below add the stronger
+# promise the boundary alone cannot state: the core does NO I/O of any kind — no
+# filesystem, no network, no process control, no environment reads. Mutation coverage for
+# these sources runs from the workspace root (../noha.yaml), killed by the full suite.
+stack: rust
+root: .
+baseline: ../.noha/baseline-core.tsv
+max: 500
+test: cargo test --quiet
+guard: cargo clippy --all-targets -- -D warnings
+build: cargo test --no-run --quiet
+focus: cargo test --quiet {test}
+focus_kill_codes: 101
+sources:
+  - src/embed.rs
+  - src/lib.rs
+  - src/retrieval.rs
+  - src/semantic.rs
+  - src/vector.rs
+  - src/working.rs
+# The pure-logic promise, mechanically held: the core computes, it never touches the world.
+constraints:
+  - forbid ** std::fs
+  - forbid ** std::net
+  - forbid ** std::process
+  - forbid ** std::env
+overflow_checks: false
+fail_closed: true
+# Every discoverable src/*.rs must be declared above — no core source may sit outside
+# the audit surface.
+require_full_surface: true
