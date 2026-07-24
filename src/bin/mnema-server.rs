@@ -1,3 +1,8 @@
+// A binary is its own crate root, so the library's `#![forbid(unsafe_code)]` does not reach
+// here. This server parses untrusted JSON-RPC from whatever client is wired to it — the last
+// place in the workspace that should be exempt from the ban.
+#![forbid(unsafe_code)]
+
 //! `mnema-server` — a Model Context Protocol server exposing mnema's memory as tools over stdio.
 //!
 //! Any MCP client (Claude Code, Cursor, Claude Desktop) can give an agent **private, local,
