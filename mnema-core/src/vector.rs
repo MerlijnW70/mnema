@@ -31,8 +31,8 @@ pub trait Embedder {
     /// return a short vector. Two guarantees rest on that:
     ///
     /// * the index keeps a consistent width, so one bad call cannot corrupt it; and
-    /// * [`cosine`] scores a zero-magnitude vector at exactly `0.0`, never `NaN`, so a degraded
-    ///   embedding cannot poison ranking.
+    /// * this crate's cosine similarity scores a zero-magnitude vector at exactly `0.0`, never
+    ///   `NaN`, so a degraded embedding cannot poison ranking.
     ///
     /// The memory is still **stored and still reachable** — hybrid retrieval finds it through
     /// the lexical channel; only the semantic channel is blind to it until it is re-embedded.
