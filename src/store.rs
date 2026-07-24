@@ -510,19 +510,26 @@ pub(crate) fn take_u8(buf: &[u8], off: usize) -> Result<(u8, usize), StoreError>
     Ok((s[0], next))
 }
 
+// `take_slice` returns exactly the requested width or errors, so each `try_into` below cannot
+// fail. It is still propagated rather than unwrapped: the array width and the literal passed to
+// `take_slice` are two facts that must agree, and a `?` keeps a future edit that breaks that
+// agreement a clean `Truncated` instead of a panic in a decoder fed untrusted bytes.
 pub(crate) fn take_u32(buf: &[u8], off: usize) -> Result<(u32, usize), StoreError> {
     let (s, next) = take_slice(buf, off, 4)?;
-    Ok((u32::from_le_bytes(s.try_into().unwrap()), next)) // invariant: take_slice just returned exactly 4 bytes — infallible
+    let bytes = s.try_into().map_err(|_| StoreError::Truncated)?;
+    Ok((u32::from_le_bytes(bytes), next))
 }
 
 pub(crate) fn take_u64(buf: &[u8], off: usize) -> Result<(u64, usize), StoreError> {
     let (s, next) = take_slice(buf, off, 8)?;
-    Ok((u64::from_le_bytes(s.try_into().unwrap()), next)) // invariant: take_slice just returned exactly 8 bytes — infallible
+    let bytes = s.try_into().map_err(|_| StoreError::Truncated)?;
+    Ok((u64::from_le_bytes(bytes), next))
 }
 
 pub(crate) fn take_f32(buf: &[u8], off: usize) -> Result<(f32, usize), StoreError> {
     let (s, next) = take_slice(buf, off, 4)?;
-    Ok((f32::from_le_bytes(s.try_into().unwrap()), next)) // invariant: take_slice just returned exactly 4 bytes — infallible
+    let bytes = s.try_into().map_err(|_| StoreError::Truncated)?;
+    Ok((f32::from_le_bytes(bytes), next))
 }
 
 /// Read a length-prefixed byte string at `off`: a `u64` LE length, then its bytes. The length is
