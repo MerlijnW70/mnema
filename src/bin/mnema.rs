@@ -1,3 +1,8 @@
+// A binary is its own crate root, so the library's `#![forbid(unsafe_code)]` does not reach
+// here. Without this line these 400-odd lines would be the one part of the workspace where
+// `unsafe` could appear unnoticed.
+#![forbid(unsafe_code)]
+
 //! `mnema` — a tiny CLI over the memory layer, so non-Rust callers can remember and recall
 //! across runs.
 //!
