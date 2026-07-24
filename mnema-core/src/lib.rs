@@ -204,6 +204,44 @@ pub(crate) fn pack_bundle(
 mod tests {
     use super::*;
 
+    /// The egress policy as **data**: every tier/destination pair and the decision it must
+    /// produce. This is the specification, deliberately a literal table rather than code — a
+    /// test that recomputed the decision would only prove the implementation equals itself.
+    #[rustfmt::skip]
+    const POLICY: &[(EgressTier, Destination, EgressDecision)] = {
+        use Destination::{Local, Remote};
+        use EgressDecision::{Allow, Deny, Redact};
+        use EgressTier::{Open, Private, Redacted};
+        &[
+            (Open,     Local,  Allow),
+            (Open,     Remote, Allow),
+            (Redacted, Local,  Allow),
+            (Redacted, Remote, Redact),
+            (Private,  Local,  Allow),
+            // The invariant, at the policy layer (ADR-0021):
+            (Private,  Remote, Deny),
+        ]
+    };
+
+    /// Every tier the policy must cover.
+    const ALL_TIERS: &[EgressTier] = &[EgressTier::Open, EgressTier::Redacted, EgressTier::Private];
+    /// Every destination the policy must cover.
+    const ALL_DESTINATIONS: &[Destination] = &[Destination::Local, Destination::Remote];
+
+    /// Adding a variant to either enum breaks *this* match. It is the single place that has to
+    /// be found by hand, and the compiler finds it for you; from there the count assertion in
+    /// `egress_policy_table_is_exact` fails until `ALL_*` and `POLICY` are extended — so a new
+    /// tier or destination cannot reach production with its egress behaviour untested.
+    #[allow(dead_code)]
+    fn _every_variant_is_listed(tier: EgressTier, dest: Destination) {
+        match tier {
+            EgressTier::Open | EgressTier::Redacted | EgressTier::Private => {}
+        }
+        match dest {
+            Destination::Local | Destination::Remote => {}
+        }
+    }
+
     fn mem(id: MemoryId, tier: EgressTier, at: u64, content: &str) -> Memory {
         Memory {
             id,
@@ -218,16 +256,42 @@ mod tests {
 
     #[test]
     fn egress_policy_table_is_exact() {
-        use crate::Destination::*;
-        use crate::EgressDecision::*;
-        use crate::EgressTier::*;
-        assert_eq!(egress_decision(Open, Remote), Allow);
-        assert_eq!(egress_decision(Open, Local), Allow);
-        assert_eq!(egress_decision(Redacted, Local), Allow);
-        assert_eq!(egress_decision(Redacted, Remote), Redact);
-        assert_eq!(egress_decision(Private, Local), Allow);
-        // The invariant, at the policy layer:
-        assert_eq!(egress_decision(Private, Remote), Deny);
+        // Exhaustive by construction: the table must state an expectation for every pair that
+        // exists, not merely for the pairs someone remembered to write down. Adding a variant
+        // to either enum breaks `_every_variant_is_listed` (a compile error, so it cannot be
+        // missed), and this assertion then fails until POLICY and ALL_* are extended.
+        assert_eq!(
+            POLICY.len(),
+            ALL_TIERS.len() * ALL_DESTINATIONS.len(),
+            "the policy table does not cover every tier x destination pair — a case is untested"
+        );
+
+        for tier in ALL_TIERS {
+            for dest in ALL_DESTINATIONS {
+                let expected = POLICY
+                    .iter()
+                    .find(|(t, d, _)| t == tier && d == dest)
+                    .map(|(_, _, decision)| *decision)
+                    .unwrap_or_else(|| {
+                        panic!("no expectation stated for {tier:?} bound for {dest:?}")
+                    });
+                assert_eq!(
+                    egress_decision(*tier, *dest),
+                    expected,
+                    "egress policy wrong for {tier:?} bound for {dest:?}"
+                );
+            }
+        }
+    }
+
+    /// The one row whose violation is a privacy breach rather than a bug, asserted on its own
+    /// so a mistake in the loop above cannot quietly take it down too.
+    #[test]
+    fn private_never_leaves_for_a_remote_destination() {
+        assert_eq!(
+            egress_decision(EgressTier::Private, Destination::Remote),
+            EgressDecision::Deny
+        );
     }
 
     #[test]
