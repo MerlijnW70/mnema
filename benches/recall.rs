@@ -19,13 +19,18 @@
 //! this is mnema's own harness (an honest retrieval measure like mnemo's LoCoMo R@k), not a
 //! LongMemEval leaderboard score.
 
+#[cfg(feature = "secure")]
 use mnema::facade::Mnema;
+#[cfg(feature = "secure")]
 use mnema::retrieval::RetrievalWeights;
+#[cfg(feature = "secure")]
 use mnema::vector::Embedder;
+#[cfg(feature = "secure")]
 use mnema::{Destination, EgressTier};
 
 /// `(memory, paraphrase-query)` — the query means the same as the memory but is worded
 /// differently, so a lexical embedder shares little/nothing to match on.
+#[cfg(feature = "secure")]
 const PAIRS: &[(&str, &str)] = &[
     (
         "I moved my code editor from VS Code to Neovim last month",
@@ -135,6 +140,7 @@ const PAIRS: &[(&str, &str)] = &[
 
 /// Store the corpus, then measure how often each paraphrase query retrieves its own memory in
 /// the top-1 / top-3 / top-5. Returns the three recall fractions.
+#[cfg(feature = "secure")]
 fn evaluate<E: Embedder>(embedder: E, weights: RetrievalWeights) -> (f64, f64, f64) {
     let mut mem = Mnema::new(embedder);
     let ids: Vec<u64> = PAIRS
@@ -163,7 +169,7 @@ fn evaluate<E: Embedder>(embedder: E, weights: RetrievalWeights) -> (f64, f64, f
     (r1 as f64 / n, r3 as f64 / n, r5 as f64 / n)
 }
 
-#[cfg(feature = "local-embed")]
+#[cfg(all(feature = "secure", feature = "local-embed"))]
 fn main() {
     use mnema::embed::HashEmbedder;
     use mnema::model_embed::MiniLmEmbedder;
@@ -190,7 +196,7 @@ fn main() {
     );
 }
 
-#[cfg(not(feature = "local-embed"))]
+#[cfg(all(feature = "secure", not(feature = "local-embed")))]
 fn main() {
     // The lexical baseline alone is not the point; the comparison needs the model.
     let (l1, l3, l5) = evaluate(
@@ -199,4 +205,10 @@ fn main() {
     );
     println!("lexical-only R@1/R@3/R@5 = {l1:.3}/{l3:.3}/{l5:.3}");
     println!("re-run with `--features local-embed` to compare against the semantic path.");
+}
+
+// The corpus is stored through the `Mnema` facade, which lives behind `secure`.
+#[cfg(not(feature = "secure"))]
+fn main() {
+    println!("run with `--features secure,local-embed` (see the bench header).");
 }
