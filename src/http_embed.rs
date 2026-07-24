@@ -268,31 +268,39 @@ impl Embedder for HttpEmbedder {
     }
 
     fn embed(&self, text: &str) -> Vec<f32> {
-        let parsed = match request_embedding(&self.agent, &self.url, &self.model, self.api, text) {
-            Ok(resp) => parse_embedding(&resp),
-            Err(_) => None,
-        };
-        match parsed {
-            Some(v) if v.len() == self.dims => v,
-            // Degrade like the other embedders: a zero vector of the fixed width keeps the index
-            // consistent (the memory is stored, just unmatched this call) rather than panicking
-            // mid-recall on a transient endpoint failure or an unexpected width.
-            Some(v) => {
-                eprintln!(
-                    "mnema: HttpEmbedder got width {} (expected {}); returning zero vector",
-                    v.len(),
-                    self.dims
-                );
-                vec![0.0; self.dims]
-            }
-            None => {
-                eprintln!(
-                    "mnema: HttpEmbedder request to {} failed; returning zero vector",
-                    self.url
-                );
+        // Degrade per the `Embedder` contract: a zero vector of the fixed width keeps the index
+        // consistent (the memory is stored and still reachable lexically, just not semantically)
+        // rather than panicking mid-recall on a transient endpoint failure or an unexpected width.
+        match self.try_embed(text) {
+            Ok(v) => v,
+            Err(reason) => {
+                eprintln!("mnema: HttpEmbedder degraded to a zero vector — {reason}");
                 vec![0.0; self.dims]
             }
         }
+    }
+}
+
+impl HttpEmbedder {
+    /// Embed `text`, keeping the reason a failure happened instead of collapsing every cause
+    /// into "it did not work".
+    ///
+    /// The degraded path is diagnosable only if the cause survives to the log line: a refused
+    /// connection, an HTTP 500, a timeout and a malformed body are four different operator
+    /// actions, and `Err(_) => None` made them indistinguishable.
+    fn try_embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        let resp = request_embedding(&self.agent, &self.url, &self.model, self.api, text)
+            .map_err(|e| format!("request to {} failed: {e}", self.url))?;
+        let parsed = parse_embedding(&resp)
+            .ok_or_else(|| format!("response from {} held no embedding array", self.url))?;
+        if parsed.len() != self.dims {
+            return Err(format!(
+                "got width {} (expected {})",
+                parsed.len(),
+                self.dims
+            ));
+        }
+        Ok(parsed)
     }
 }
 
@@ -384,6 +392,63 @@ mod tests {
         let embedder = HttpEmbedder::connect(url.as_str(), "m", Api::Ollama).expect("connect");
         assert_eq!(embedder.embed("a"), vec![0.5_f32, 1.5, 2.5]);
         assert_eq!(embedder.embed("b"), vec![0.0_f32, 0.0, 0.0]);
+        server.join().expect("server thread");
+    }
+
+    /// Each way an embedding can fail must survive to the operator as a *distinct* reason.
+    /// Collapsing them (the old `Err(_) => None`) told the operator "it did not work" and left
+    /// them unable to tell a refused connection from a wrong-width model — different fixes.
+    #[test]
+    fn a_degraded_embed_reports_which_cause_it_hit() {
+        let (url, server) = spawn_canned_server(vec![
+            r#"{"embedding":[1.0,2.0,3.0]}"#.into(), // connect probe -> dims = 3
+            r#"{"embedding":[9.0,9.0]}"#.into(),     // wrong width
+            r#"{"nonsense":true}"#.into(),           // no embedding array
+        ]);
+        let embedder = HttpEmbedder::connect(url.as_str(), "m", Api::Ollama).expect("connect");
+
+        let width = embedder
+            .try_embed("b")
+            .expect_err("a wrong width must not be accepted");
+        assert!(
+            width.contains("width 2") && width.contains("expected 3"),
+            "the width mismatch must name both widths, got: {width}"
+        );
+
+        let shape = embedder
+            .try_embed("c")
+            .expect_err("a response with no embedding array must not be accepted");
+        assert!(
+            shape.contains("no embedding array"),
+            "a malformed body must be distinguishable from a width mismatch, got: {shape}"
+        );
+        assert_ne!(
+            width, shape,
+            "distinct causes must produce distinct reasons"
+        );
+
+        server.join().expect("server thread");
+    }
+
+    /// However it fails, the degraded vector keeps the index's width — the invariant the
+    /// `Embedder` degradation contract rests on. A short vector here would corrupt the index.
+    #[test]
+    fn a_degraded_embed_still_returns_a_full_width_zero_vector() {
+        let (url, server) = spawn_canned_server(vec![
+            r#"{"embedding":[1.0,2.0,3.0]}"#.into(), // connect probe -> dims = 3
+            r#"{"nonsense":true}"#.into(),           // no embedding array -> degrade
+        ]);
+        let embedder = HttpEmbedder::connect(url.as_str(), "m", Api::Ollama).expect("connect");
+        let degraded = embedder.embed("c");
+        assert_eq!(
+            degraded.len(),
+            embedder.dims(),
+            "degraded width must match dims()"
+        );
+        assert!(
+            degraded.iter().all(|x| *x == 0.0),
+            "degraded vector must be all zeros"
+        );
         server.join().expect("server thread");
     }
 

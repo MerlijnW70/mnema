@@ -22,6 +22,24 @@ use crate::MemoryId;
 /// is the caller's choice. All vectors handed to one [`VectorIndex`] must share `dims`.
 pub trait Embedder {
     /// Embed `text` into a fixed-length vector of `dims()` elements.
+    ///
+    /// # Degradation contract
+    ///
+    /// `embed` is infallible by signature, so an implementation that cannot produce a real
+    /// embedding — a model that failed to run, an endpoint that refused the connection, a
+    /// response of the wrong width — **must return `vec![0.0; dims()]`** rather than panic or
+    /// return a short vector. Two guarantees rest on that:
+    ///
+    /// * the index keeps a consistent width, so one bad call cannot corrupt it; and
+    /// * [`cosine`] scores a zero-magnitude vector at exactly `0.0`, never `NaN`, so a degraded
+    ///   embedding cannot poison ranking.
+    ///
+    /// The memory is still **stored and still reachable** — hybrid retrieval finds it through
+    /// the lexical channel; only the semantic channel is blind to it until it is re-embedded.
+    /// Because that loss is invisible in the returned value, an implementation that degrades
+    /// **must say so on stderr, including the cause**: a silent zero vector is indistinguishable
+    /// from a genuine one, and the operator is the only party who can fix the endpoint or the
+    /// model.
     fn embed(&self, text: &str) -> Vec<f32>;
     /// The dimensionality every embedding from this embedder has.
     fn dims(&self) -> usize;
